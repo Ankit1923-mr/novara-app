@@ -1,11 +1,10 @@
 """
 NOVARA backend.
 
-/profile, /scenario, /conversation and /repair are wired to real logic
-(Knowledge Graph + Adaptive Learning Engine + AI Conversation Partner +
-Repair Engine + Personalization Engine). /readiness is still mocked —
-Readiness Scoring Engine lands in a later task. See docs/api-contract.md
-for the frozen shapes.
+All six modules are wired to real logic: Knowledge Graph, Adaptive
+Learning Engine, AI Conversation Partner, Repair Engine, Personalization
+Engine, and Readiness Scoring Engine. See docs/api-contract.md for the
+frozen shapes.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -22,14 +21,16 @@ from app.models import (
 )
 from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn
-from app.knowledge_graph import get_subgraph
+from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
 from app.personalization_engine import update_scores
+from app.readiness_engine import compute_readiness
 
 app = FastAPI(title="NOVARA API")
 
 # In-memory learner store for MVP. learner_id -> {purpose, interests,
-# weak_areas, pace_score, confidence_score, recently_seen: list[str]}.
+# weak_areas, pace_score, confidence_score, recently_seen: list[str],
+# total_turns: int, repair_counts: dict[str, int]}.
 # Swap for a real DB once persistence matters beyond a demo session.
 LEARNERS: dict[str, dict] = {}
 
@@ -47,6 +48,8 @@ def create_profile(req: ProfileRequest):
         "pace_score": 0.5,
         "confidence_score": 0.5,
         "recently_seen": [],
+        "total_turns": 0,
+        "repair_counts": {},
     }
     return ProfileResponse(
         learner_id=req.learner_id,
@@ -108,6 +111,11 @@ def post_conversation(req: ConversationRequest):
     candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
     repair_result = detect_repair(req.message, candidate_patterns)
 
+    learner["total_turns"] += 1
+    if repair_result is not None:
+        error_type = repair_result["error_type"]
+        learner["repair_counts"][error_type] = learner["repair_counts"].get(error_type, 0) + 1
+
     updated_scores = update_scores(
         pace_score=learner["pace_score"],
         confidence_score=learner["confidence_score"],
@@ -134,20 +142,18 @@ def post_repair(req: RepairRequest):
 def get_readiness(learner_id: str):
     if not learner_id:
         raise HTTPException(status_code=400, detail="learner_id required")
-    return ReadinessResponse(
-        learner_id=learner_id,
-        aggregate_score=0.72,
-        breakdown={
-            "language_accuracy": 0.8,
-            "repair_success_rate": 0.65,
-            "register_appropriateness": 0.7,
-            "transfer_success": 0.7,
-        },
-        purpose="trip",
-        weights_used={
-            "language_accuracy": 0.3,
-            "repair_success_rate": 0.3,
-            "register_appropriateness": 0.2,
-            "transfer_success": 0.2,
-        },
+
+    learner = LEARNERS.get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+
+    total_known_situations = len(list_situations(learner["purpose"]))
+    result = compute_readiness(
+        purpose=learner["purpose"],
+        total_turns=learner["total_turns"],
+        repair_counts=learner["repair_counts"],
+        distinct_situations_visited=len(learner["recently_seen"]),
+        total_known_situations=total_known_situations,
     )
+
+    return ReadinessResponse(learner_id=learner_id, **result)

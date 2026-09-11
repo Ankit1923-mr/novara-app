@@ -79,3 +79,13 @@ A third issue surfaced after that: a comprehension marker ("repetir") legitimate
 **Why this matters for the report**: it's a real example of a contract evolving after Day 0 without breaking the other side's already-built code — handled by making the new field optional and documenting the same-turn fallback behavior, not by requiring Sakshi to change anything on the Android side before this could ship.
 
 **Result**: 10 new personalization_engine tests including the specified baseline check (10 simulated interactions with varying response time/correctness, verifying scores move in the expected direction after each one) + 3 new endpoint tests. 71/71 passing.
+
+### [2026-09-11] Readiness Scoring Engine: defining "transfer" without a dedicated transfer-test flow
+
+**Problem**: The architecture defines `transfer_success` as one of four readiness dimensions ("performs in unfamiliar situations"), but there's no dedicated transfer-test flow built yet (learn-in-one-scenario, test-in-a-new-one) — that's future work beyond Review 3 scope. Needed a real, honestly-labeled proxy from data we actually have, not a hardcoded placeholder.
+
+**Decision**: Defined `transfer_success` as situation **breadth** — the fraction of a purpose's known situations (café, hotel, transport, etc., from the Knowledge Graph's `list_situations()`) the learner has actually practiced (`recently_seen`, already tracked by the Adaptive Engine), rather than repeating one scenario. Reasoning: genuine transfer can't be measured without a real transfer-test flow, but breadth across situations is a legitimate, defensible precursor to it — a learner who's only ever done the café scenario clearly hasn't demonstrated transfer, whether or not we can test it directly yet.
+
+**Also decided**: purpose-specific weights, not a single fixed formula (the rubric's "novel component" requirement) — Trip purpose weights `transfer_success` heaviest (a traveler needs breadth across many unplanned situations, register mistakes are more forgivable), Casual purpose weights `register_appropriateness` heaviest (sounding socially natural with recurring peers matters more than covering many disconnected situations). Documented directly in `readiness_engine.py`'s comments so the reasoning doesn't need to be reconstructed later for the report.
+
+**Result**: 10 new readiness_engine tests including the baseline check (3 synthetic high/mid/low-performing learners rank correctly, tested for both purposes) + 3 new endpoint tests verifying real repair history moves the score. All 6 backend modules are now wired to real logic. 83/83 passing.

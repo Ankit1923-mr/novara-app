@@ -121,4 +121,43 @@ def test_conversation_flags_repair_on_comprehension_signal(monkeypatch):
 def test_readiness():
     r = client.get("/readiness", params={"learner_id": "u1"})
     assert r.status_code == 200
-    assert 0 <= r.json()["aggregate_score"] <= 1
+    body = r.json()
+    assert 0 <= body["aggregate_score"] <= 1
+    assert body["purpose"] == "trip"
+    assert set(body["breakdown"].keys()) == {
+        "language_accuracy", "repair_success_rate", "register_appropriateness", "transfer_success"
+    }
+    assert abs(sum(body["weights_used"].values()) - 1.0) < 1e-6
+
+
+def test_readiness_requires_existing_learner():
+    r = client.get("/readiness", params={"learner_id": "never_created"})
+    assert r.status_code == 404
+
+
+def test_readiness_reflects_repair_history(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(llm_client, "_clients", None)
+
+    client.post("/profile", json={
+        "learner_id": "u_readiness", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": ["food"], "weak_areas": []
+    })
+    scenario_id = client.get("/scenario", params={"learner_id": "u_readiness"}).json()["scenario_id"]
+
+    # correct turn, no repair
+    client.post("/conversation", json={
+        "learner_id": "u_readiness", "scenario_id": scenario_id,
+        "message": "Quiero un café, por favor.", "turn_number": 1
+    })
+    before = client.get("/readiness", params={"learner_id": "u_readiness"}).json()
+
+    # comprehension-repair turn
+    client.post("/conversation", json={
+        "learner_id": "u_readiness", "scenario_id": scenario_id,
+        "message": "no entiendo", "turn_number": 2
+    })
+    after = client.get("/readiness", params={"learner_id": "u_readiness"}).json()
+
+    assert after["breakdown"]["repair_success_rate"] < before["breakdown"]["repair_success_rate"]
