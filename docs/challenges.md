@@ -22,3 +22,17 @@ Log every real problem you hit and what you did about it — this is what rubric
 **Reasoning**: At MVP scale (35 nodes, Trip+Casual only), filtering is O(n) regardless of representation — a graph library adds a dependency and query-language overhead with no functional benefit yet. Edges are still present, just implicit: two nodes sharing a `situation_tags` value are connected by that situation, and `get_subgraph`/`list_situations` traverse exactly that relationship.
 
 **Result**: Kept the flat-list implementation. Interface (`get_subgraph`, `list_situations`, `get_node`) is graph-library-agnostic, so swapping to NetworkX or Neo4j later — if scenario complexity grows past MVP — is a drop-in change, not a rewrite.
+
+### [2026-09-11] LLM provider: Anthropic → OpenRouter (budget constraint)
+
+**Problem**: The AI Conversation Partner (task 3) was built against the Anthropic API, which has no persistent free tier — real testing needed a funded API key (~$5 minimum), which wasn't viable on a student budget.
+
+**Cause**: Provider choice, not a code bug. Anthropic requires billing for any real usage.
+
+**Fix**: Rewrote `llm_client.py` to call OpenRouter's OpenAI-compatible API instead, using a free-tier model. Two issues surfaced during the swap:
+1. First-choice free model (`meta-llama/llama-3.1-8b-instruct:free`) was retired — OpenRouter returned 404 with a message pointing to the paid slug.
+2. Second choice (`google/gemma-4-31b-it:free`) returned 429 — free-tier models sit behind a shared rate-limited pool and can be temporarily unavailable under load.
+
+Tested several free models directly against the API before picking one; landed on `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, which held up under a real in-character Spanish conversation test (stayed in scenario, correct register, short natural reply).
+
+**Result**: `/conversation` now runs on a genuinely free model. Documented risk: free-tier models can be retired or rate-limited without notice — `OPENROUTER_MODEL` is a swappable env var for exactly this reason, and the fallback response (`[offline] ...`) means the app degrades gracefully instead of crashing if the model goes down mid-demo. Also fixed a test-isolation bug this swap surfaced: the module-level `_client` cache in `llm_client.py` persisted a real client across tests in the same pytest run, making the "no API key" fallback test order-dependent — fixed by resetting `_client` to `None` in the relevant test setup.

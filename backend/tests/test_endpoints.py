@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
+import app.llm_client as llm_client
 
 client = TestClient(app)
 
@@ -28,7 +29,14 @@ def test_scenario_requires_existing_profile():
     assert r.status_code == 404
 
 
-def test_conversation():
+def test_conversation(monkeypatch):
+    # Force the offline fallback path so this test is deterministic and
+    # network-free in CI, regardless of whether a real OPENROUTER_API_KEY
+    # is set in the environment. Real-call correctness is covered by
+    # test_conversation_engine.py's injected fake client.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(llm_client, "_client", None)
+
     # depends on test_scenario having created and stored a scenario for
     # "u1" first (pytest runs this file top-to-bottom).
     scenario_id = client.get("/scenario", params={"learner_id": "u1"}).json()["scenario_id"]
@@ -39,6 +47,7 @@ def test_conversation():
     assert r.status_code == 200
     assert "reply" in r.json()
     assert isinstance(r.json()["reply"], str) and len(r.json()["reply"]) > 0
+    assert r.json()["reply"].startswith("[offline]")
 
 
 def test_conversation_requires_existing_scenario():

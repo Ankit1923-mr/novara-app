@@ -16,6 +16,14 @@ MVP: Spanish, Trip + Casual purposes only. Exam/Relocation and ML-trained repair
 ```
 cd backend
 pip install -r requirements.txt
+```
+Create `backend/.env` (gitignored, never commit it) with:
+```
+OPENROUTER_API_KEY=your-key-here
+OPENROUTER_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+```
+Get a free key at openrouter.ai. Without it, `/conversation` still works but returns a `[offline] ...` placeholder reply instead of a real one.
+```
 uvicorn app.main:app --reload
 ```
 
