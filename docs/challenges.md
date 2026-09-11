@@ -36,3 +36,13 @@ Log every real problem you hit and what you did about it — this is what rubric
 Tested several free models directly against the API before picking one; landed on `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, which held up under a real in-character Spanish conversation test (stayed in scenario, correct register, short natural reply).
 
 **Result**: `/conversation` now runs on a genuinely free model. Documented risk: free-tier models can be retired or rate-limited without notice — `OPENROUTER_MODEL` is a swappable env var for exactly this reason, and the fallback response (`[offline] ...`) means the app degrades gracefully instead of crashing if the model goes down mid-demo. Also fixed a test-isolation bug this swap surfaced: the module-level `_client` cache in `llm_client.py` persisted a real client across tests in the same pytest run, making the "no API key" fallback test order-dependent — fixed by resetting `_client` to `None` in the relevant test setup.
+
+### [2026-09-11] Free-tier rate limiting: retry + model fallback chain
+
+**Problem**: OpenRouter's free models run on a shared capacity pool donated by the underlying provider (Google, NVIDIA, etc.), not a per-key allocation. Demand from *other* OpenRouter users can 429 our requests regardless of our own usage — unpredictable, and a real risk of failing mid-demo.
+
+**Cause**: Structural to free-tier hosting, not something we can fix by using our key "correctly."
+
+**Fix**: `call_llm` now retries once (short backoff) on 429 before giving up on a model, then falls through an ordered chain of 9 free chat-capable models (excluded embedding/rerank/content-safety-classifier models from OpenRouter's free list — wrong tool for conversation generation). Only returns the offline placeholder if every model in the chain fails.
+
+**Result**: 8 new tests using a scripted fake client (rate-limit-then-succeed, exhaust-retries-then-fallback, not-found-skips-without-retry, all-models-fail) — 40/40 passing. Demo-day risk reduced from "one model 429s → app breaks" to "all 9 models 429 simultaneously → app breaks," which is a much smaller probability.
