@@ -69,3 +69,13 @@ Tested several free models directly against the API before picking one; landed o
 A third issue surfaced after that: a comprehension marker ("repetir") legitimately appears inside a well-formed but wrong-register request ("Puedes repetir por favor"), and the comprehension check ran first, misclassifying it. **Fix**: reordered the checks so the more specific, structural register signal (verb-pair match) runs before the generic keyword-based comprehension check.
 
 **Result**: 100% on the 20-sample set after tuning — reported conservatively as "meets the ≥70% baseline," not as a generalization claim, since the set was iterated against while tuning (documented directly in `tests/test_repair_engine.py`'s docstring to avoid overstating this in the report). Real learner input (typos, mixed errors, code-switching) will be messier than these clean single-error examples.
+
+### [2026-09-11] Personalization Engine: contract change for response timing
+
+**Problem**: The Personalization Engine's pace score needs how long a learner took to respond, but the frozen `/conversation` request contract (`docs/api-contract.md`) has no timing field — it wasn't anticipated when the contract was written on Day 0.
+
+**Decision**: Added `response_time_ms` as an **optional** field on `ConversationRequest` (defaults to `None`) rather than reopening the contract as a breaking change. Android can omit it entirely and everything still works — `update_scores()` explicitly leaves `pace_score` unchanged when `response_time_ms` is `None`, rather than nudging it toward a meaningless default. Confidence score doesn't depend on timing at all (driven by whether repair was triggered), so it updates every turn regardless.
+
+**Why this matters for the report**: it's a real example of a contract evolving after Day 0 without breaking the other side's already-built code — handled by making the new field optional and documenting the same-turn fallback behavior, not by requiring Sakshi to change anything on the Android side before this could ship.
+
+**Result**: 10 new personalization_engine tests including the specified baseline check (10 simulated interactions with varying response time/correctness, verifying scores move in the expected direction after each one) + 3 new endpoint tests. 71/71 passing.

@@ -65,9 +65,11 @@ Send a learner message, get the AI partner's reply + repair flag if triggered.
   "learner_id": "string",
   "scenario_id": "string",
   "message": "Quiero un café.",
-  "turn_number": 3
+  "turn_number": 3,
+  "response_time_ms": 2400
 }
 ```
+`response_time_ms` is **optional** (added after the initial contract freeze, backward-compatible — omit it and the request still works). If sent, it's how long the learner took to type/speak this turn, in milliseconds; feeds the Personalization Engine's pace score. Not required for a working demo, but send it if the UI can measure it (e.g. time between scenario/reply render and message send).
 
 **Response — 200**
 ```json

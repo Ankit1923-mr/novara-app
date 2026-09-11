@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, LEARNERS
 import app.llm_client as llm_client
 
 client = TestClient(app)
@@ -57,6 +57,40 @@ def test_conversation_requires_existing_scenario():
         "message": "Hola", "turn_number": 1
     })
     assert r.status_code == 404
+
+
+def test_conversation_requires_existing_learner():
+    r = client.post("/conversation", json={
+        "learner_id": "never_created", "scenario_id": "anything",
+        "message": "Hola", "turn_number": 1
+    })
+    assert r.status_code == 404
+
+
+def test_conversation_updates_personalization_scores(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(llm_client, "_clients", None)
+
+    client.post("/profile", json={
+        "learner_id": "u_personalization", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": ["food"], "weak_areas": []
+    })
+    scenario_id = client.get("/scenario", params={"learner_id": "u_personalization"}).json()["scenario_id"]
+
+    before_pace = LEARNERS["u_personalization"]["pace_score"]
+    before_confidence = LEARNERS["u_personalization"]["confidence_score"]
+
+    client.post("/conversation", json={
+        "learner_id": "u_personalization", "scenario_id": scenario_id,
+        "message": "no entiendo", "turn_number": 1, "response_time_ms": 500,
+    })
+
+    after_pace = LEARNERS["u_personalization"]["pace_score"]
+    after_confidence = LEARNERS["u_personalization"]["confidence_score"]
+
+    assert after_pace > before_pace  # fast response (500ms) raises pace
+    assert after_confidence < before_confidence  # "no entiendo" triggers repair, lowers confidence
 
 
 def test_repair():

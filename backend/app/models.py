@@ -39,6 +39,7 @@ class ConversationRequest(BaseModel):
     scenario_id: str
     message: str
     turn_number: int
+    response_time_ms: Optional[int] = None  # optional: how long the learner took to answer, feeds Personalization Engine's pace score
 
 
 class RepairDetail(BaseModel):

@@ -3,8 +3,9 @@ NOVARA backend.
 
 /profile, /scenario, /conversation and /repair are wired to real logic
 (Knowledge Graph + Adaptive Learning Engine + AI Conversation Partner +
-Repair Engine). /readiness is still mocked — Readiness Scoring Engine
-lands in a later task. See docs/api-contract.md for the frozen shapes.
+Repair Engine + Personalization Engine). /readiness is still mocked —
+Readiness Scoring Engine lands in a later task. See docs/api-contract.md
+for the frozen shapes.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -23,6 +24,7 @@ from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn
 from app.knowledge_graph import get_subgraph
 from app.repair_engine import repair as run_repair, detect_repair
+from app.personalization_engine import update_scores
 
 app = FastAPI(title="NOVARA API")
 
@@ -79,6 +81,10 @@ def get_scenario(learner_id: str):
 
 @app.post("/conversation", response_model=ConversationResponse)
 def post_conversation(req: ConversationRequest):
+    learner = LEARNERS.get(req.learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+
     scenario = SCENARIOS.get(req.scenario_id)
     if scenario is None:
         raise HTTPException(status_code=404, detail="scenario_id not found — call /scenario first")
@@ -101,6 +107,15 @@ def post_conversation(req: ConversationRequest):
     ]
     candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
     repair_result = detect_repair(req.message, candidate_patterns)
+
+    updated_scores = update_scores(
+        pace_score=learner["pace_score"],
+        confidence_score=learner["confidence_score"],
+        repair_triggered=repair_result is not None,
+        response_time_ms=req.response_time_ms,
+    )
+    learner["pace_score"] = updated_scores["pace_score"]
+    learner["confidence_score"] = updated_scores["confidence_score"]
 
     return ConversationResponse(
         reply=reply,
