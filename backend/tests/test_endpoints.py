@@ -65,6 +65,23 @@ def test_repair():
     })
     assert r.status_code == 200
     assert r.json()["error_type"] in ["lexical", "grammar", "register", "comprehension"]
+    assert r.json()["strategy"] in ["clarify", "rephrase", "hint"]
+
+
+def test_conversation_flags_repair_on_comprehension_signal(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(llm_client, "_clients", None)
+
+    scenario_id = client.get("/scenario", params={"learner_id": "u1"}).json()["scenario_id"]
+    r = client.post("/conversation", json={
+        "learner_id": "u1", "scenario_id": scenario_id,
+        "message": "no entiendo", "turn_number": 2
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["repair_triggered"] is True
+    assert body["repair"]["error_type"] == "comprehension"
 
 
 def test_readiness():

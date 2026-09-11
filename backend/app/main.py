@@ -1,11 +1,10 @@
 """
 NOVARA backend.
 
-/profile, /scenario and /conversation are wired to real logic
-(Knowledge Graph + Adaptive Learning Engine + AI Conversation Partner).
-/repair and /readiness are still mocked — Repair Engine and Readiness
-Scoring Engine land in later tasks. See docs/api-contract.md for the
-frozen shapes.
+/profile, /scenario, /conversation and /repair are wired to real logic
+(Knowledge Graph + Adaptive Learning Engine + AI Conversation Partner +
+Repair Engine). /readiness is still mocked — Readiness Scoring Engine
+lands in a later task. See docs/api-contract.md for the frozen shapes.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -22,6 +21,8 @@ from app.models import (
 )
 from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn
+from app.knowledge_graph import get_subgraph
+from app.repair_engine import repair as run_repair, detect_repair
 
 app = FastAPI(title="NOVARA API")
 
@@ -89,22 +90,29 @@ def post_conversation(req: ConversationRequest):
         turn_number=req.turn_number,
     )
 
-    # Repair detection/selection lands in task 4 (Repair Engine) — the
-    # conversation reply is real from here on, repair stays a stub.
+    # Check the learner's message against the graph phrases relevant to
+    # this scenario's situation tags — detect_repair() decides whether
+    # it's close enough to a known phrase to be worth repairing, exactly
+    # matches (no repair), or is free-form conversation outside any
+    # known phrase (also no repair — the AI partner allows open dialogue).
+    candidate_nodes = [
+        n for tag in scenario["situation_tags"]
+        for n in get_subgraph(scenario["purpose"], situation_tag=tag)
+    ]
+    candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
+    repair_result = detect_repair(req.message, candidate_patterns)
+
     return ConversationResponse(
         reply=reply,
-        repair_triggered=False,
-        repair=None,
+        repair_triggered=repair_result is not None,
+        repair=RepairDetail(**repair_result) if repair_result else None,
     )
 
 
 @app.post("/repair", response_model=RepairDetail)
 def post_repair(req: RepairRequest):
-    return RepairDetail(
-        error_type="grammar",
-        strategy="rephrase",
-        repair_text="Try: 'Quiero un café, por favor.'",
-    )
+    result = run_repair(req.learner_utterance, req.expected_pattern)
+    return RepairDetail(**result)
 
 
 @app.get("/readiness", response_model=ReadinessResponse)
