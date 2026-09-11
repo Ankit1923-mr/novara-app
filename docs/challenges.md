@@ -46,3 +46,13 @@ Tested several free models directly against the API before picking one; landed o
 **Fix**: `call_llm` now retries once (short backoff) on 429 before giving up on a model, then falls through an ordered chain of 9 free chat-capable models (excluded embedding/rerank/content-safety-classifier models from OpenRouter's free list — wrong tool for conversation generation). Only returns the offline placeholder if every model in the chain fails.
 
 **Result**: 8 new tests using a scripted fake client (rate-limit-then-succeed, exhaust-retries-then-fallback, not-found-skips-without-retry, all-models-fail) — 40/40 passing. Demo-day risk reduced from "one model 429s → app breaks" to "all 9 models 429 simultaneously → app breaks," which is a much smaller probability.
+
+### [2026-09-11] Backup API key + hard never-pay-for-a-model guard
+
+**Problem**: A single OpenRouter key can itself die (exhausted account, revoked) independent of any individual model's rate limit — the model-fallback chain alone doesn't cover that. Separately, a retired free model's 404 error message from OpenRouter points at the *paid* version of that model as the "fix" — an unguarded fallback could silently start sending requests to a paid slug.
+
+**Fix**:
+1. Added a second (backup) OpenRouter key. `call_llm` now tries the full model-fallback chain under the primary key; only if every model fails under it does it retry the same chain under the backup key. An auth/permission error on a key short-circuits immediately to the next key rather than wasting retries on a dead key.
+2. Added `assert_free_model()` — every entry in `FALLBACK_MODELS` is checked to end in `":free"` at **import time** (fails loudly if violated), and `_model_chain()` silently drops any `OPENROUTER_MODEL` override that isn't a free slug rather than ever sending it. This is enforced in code, not just by not-configuring a paid model — a mistake (or OpenRouter's own error message pointing at a paid slug) can't cause a real charge.
+
+**Result**: 12 new tests (free-model-guard unit tests, backup-key-on-exhaustion, backup-key-on-auth-failure, both-keys-exhausted) — 48/48 passing. Both API keys are stored only in `backend/.env` (gitignored), never committed — confirmed via `git diff | grep` before every commit in this session.

@@ -35,7 +35,8 @@ def test_conversation(monkeypatch):
     # is set in the environment. Real-call correctness is covered by
     # test_conversation_engine.py's injected fake client.
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(llm_client, "_client", None)
+    monkeypatch.delenv("OPENROUTER_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(llm_client, "_clients", None)
 
     # depends on test_scenario having created and stored a scenario for
     # "u1" first (pytest runs this file top-to-bottom).
