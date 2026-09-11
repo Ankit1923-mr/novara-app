@@ -14,9 +14,18 @@ def test_profile():
 
 
 def test_scenario():
+    # depends on test_profile having created learner "u1" first (pytest
+    # runs this file top-to-bottom); test_scenario_requires_existing_profile
+    # below covers the case independently.
     r = client.get("/scenario", params={"learner_id": "u1"})
     assert r.status_code == 200
     assert r.json()["situation_tags"]
+    assert r.json()["purpose"] == "trip"
+
+
+def test_scenario_requires_existing_profile():
+    r = client.get("/scenario", params={"learner_id": "never_created"})
+    assert r.status_code == 404
 
 
 def test_conversation():

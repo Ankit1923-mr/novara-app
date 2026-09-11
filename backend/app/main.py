@@ -20,12 +20,26 @@ from app.models import (
     RepairRequest,
     ReadinessResponse,
 )
+from app.adaptive_engine import build_scenario
 
 app = FastAPI(title="NOVARA API")
+
+# In-memory learner store for MVP. learner_id -> {purpose, interests,
+# weak_areas, pace_score, confidence_score, recently_seen: list[str]}.
+# Swap for a real DB once persistence matters beyond a demo session.
+LEARNERS: dict[str, dict] = {}
 
 
 @app.post("/profile", response_model=ProfileResponse)
 def create_profile(req: ProfileRequest):
+    LEARNERS[req.learner_id] = {
+        "purpose": req.purpose,
+        "interests": req.interests,
+        "weak_areas": req.weak_areas,
+        "pace_score": 0.5,
+        "confidence_score": 0.5,
+        "recently_seen": [],
+    }
     return ProfileResponse(
         learner_id=req.learner_id,
         profile_created=True,
@@ -37,14 +51,23 @@ def create_profile(req: ProfileRequest):
 
 @app.get("/scenario", response_model=ScenarioResponse)
 def get_scenario(learner_id: str):
-    return ScenarioResponse(
-        scenario_id="mock-scenario-cafe",
-        purpose="trip",
-        title="Ordering coffee",
-        setting="A café in Madrid",
-        situation_tags=["food", "ordering"],
-        opening_line="Hola, ¿qué le pongo?",
+    learner = LEARNERS.get(learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+
+    scenario = build_scenario(
+        learner_id=learner_id,
+        purpose=learner["purpose"],
+        interests=learner["interests"],
+        weak_areas=learner["weak_areas"],
+        recently_seen=learner["recently_seen"],
     )
+
+    for tag in scenario["situation_tags"]:
+        if tag not in learner["recently_seen"]:
+            learner["recently_seen"].append(tag)
+
+    return ScenarioResponse(**scenario)
 
 
 @app.post("/conversation", response_model=ConversationResponse)
