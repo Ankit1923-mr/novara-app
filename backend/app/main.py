@@ -8,6 +8,7 @@ frozen shapes.
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.models import (
     ProfileRequest,
@@ -28,6 +29,17 @@ from app.readiness_engine import compute_readiness
 
 app = FastAPI(title="NOVARA API")
 
+# Wide open for MVP demo purposes — the Android app has no fixed origin
+# during development (emulator, physical device, different networks).
+# Tighten this to specific origins before any real deployment beyond
+# the class demo.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # In-memory learner store for MVP. learner_id -> {purpose, interests,
 # weak_areas, pace_score, confidence_score, recently_seen: list[str],
 # total_turns: int, repair_counts: dict[str, int]}.
@@ -37,6 +49,11 @@ LEARNERS: dict[str, dict] = {}
 # scenario_id -> scenario dict, so /conversation can look up the scenario
 # a learner is currently in without the client re-sending the full object.
 SCENARIOS: dict[str, dict] = {}
+
+
+@app.get("/")
+def health_check():
+    return {"status": "ok", "service": "novara-api"}
 
 
 @app.post("/profile", response_model=ProfileResponse)
