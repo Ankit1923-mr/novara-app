@@ -1,11 +1,11 @@
 """
-NOVARA backend — Day 0 scaffold.
+NOVARA backend.
 
-Every endpoint here returns hardcoded, schema-valid mock data so Android
-can build against a live contract immediately. Replace each mock body
-with real logic (Knowledge Graph, Adaptive Engine, Repair Engine,
-Personalization Engine, Readiness Scoring, LLM call) task by task —
-see docs/api-contract.md for the frozen shapes.
+/profile, /scenario and /conversation are wired to real logic
+(Knowledge Graph + Adaptive Learning Engine + AI Conversation Partner).
+/repair and /readiness are still mocked — Repair Engine and Readiness
+Scoring Engine land in later tasks. See docs/api-contract.md for the
+frozen shapes.
 """
 
 from fastapi import FastAPI, HTTPException
@@ -21,6 +21,7 @@ from app.models import (
     ReadinessResponse,
 )
 from app.adaptive_engine import build_scenario
+from app.conversation_engine import handle_turn
 
 app = FastAPI(title="NOVARA API")
 
@@ -28,6 +29,10 @@ app = FastAPI(title="NOVARA API")
 # weak_areas, pace_score, confidence_score, recently_seen: list[str]}.
 # Swap for a real DB once persistence matters beyond a demo session.
 LEARNERS: dict[str, dict] = {}
+
+# scenario_id -> scenario dict, so /conversation can look up the scenario
+# a learner is currently in without the client re-sending the full object.
+SCENARIOS: dict[str, dict] = {}
 
 
 @app.post("/profile", response_model=ProfileResponse)
@@ -67,23 +72,27 @@ def get_scenario(learner_id: str):
         if tag not in learner["recently_seen"]:
             learner["recently_seen"].append(tag)
 
+    SCENARIOS[scenario["scenario_id"]] = scenario
     return ScenarioResponse(**scenario)
 
 
 @app.post("/conversation", response_model=ConversationResponse)
 def post_conversation(req: ConversationRequest):
-    if req.turn_number == 3:
-        return ConversationResponse(
-            reply="¿Puede repetir, por favor?",
-            repair_triggered=True,
-            repair=RepairDetail(
-                error_type="lexical",
-                strategy="clarify",
-                repair_text="Se dice 'para llevar', no 'para llevo'.",
-            ),
-        )
+    scenario = SCENARIOS.get(req.scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="scenario_id not found — call /scenario first")
+
+    reply = handle_turn(
+        learner_id=req.learner_id,
+        scenario=scenario,
+        message=req.message,
+        turn_number=req.turn_number,
+    )
+
+    # Repair detection/selection lands in task 4 (Repair Engine) — the
+    # conversation reply is real from here on, repair stays a stub.
     return ConversationResponse(
-        reply="¿Para aquí o para llevar?",
+        reply=reply,
         repair_triggered=False,
         repair=None,
     )

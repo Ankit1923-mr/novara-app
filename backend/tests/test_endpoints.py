@@ -29,12 +29,24 @@ def test_scenario_requires_existing_profile():
 
 
 def test_conversation():
+    # depends on test_scenario having created and stored a scenario for
+    # "u1" first (pytest runs this file top-to-bottom).
+    scenario_id = client.get("/scenario", params={"learner_id": "u1"}).json()["scenario_id"]
     r = client.post("/conversation", json={
-        "learner_id": "u1", "scenario_id": "mock-scenario-cafe",
+        "learner_id": "u1", "scenario_id": scenario_id,
         "message": "Quiero un café.", "turn_number": 1
     })
     assert r.status_code == 200
     assert "reply" in r.json()
+    assert isinstance(r.json()["reply"], str) and len(r.json()["reply"]) > 0
+
+
+def test_conversation_requires_existing_scenario():
+    r = client.post("/conversation", json={
+        "learner_id": "u1", "scenario_id": "never_created",
+        "message": "Hola", "turn_number": 1
+    })
+    assert r.status_code == 404
 
 
 def test_repair():
