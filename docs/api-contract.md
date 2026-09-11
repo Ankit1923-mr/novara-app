@@ -158,6 +158,8 @@ HTTP status: 400 (bad input) / 404 (not found) / 500 (server error).
 ## Base URL
 
 - Local dev: `http://localhost:8000`
-- Deployed (fill in once live): `TBD`
+- Deployed: `https://novara-api-dnhc.onrender.com` — verified live end-to-end (health, profile, scenario, conversation, readiness) on 2026-09-11.
+
+Note: free-tier Render spins down after 15 min of inactivity — the first request after idle takes ~30-50s to wake up. Not a bug, expected on the free plan.
 
 Android should read base URL from a build config value, not hardcode it, so switching local→deployed is a one-line change.
