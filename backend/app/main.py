@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import update as sa_update, func
+from sqlalchemy import update as sa_update, func, cast, Numeric
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -247,14 +247,16 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                 "version_id": LearnerModel.version_id + 1,
                 # rounded to 4dp to match update_scores()'s own rounding —
                 # otherwise floating-point drift compounds differently
-                # between the two code paths over repeated turns.
+                # between the two code paths over repeated turns. Postgres's
+                # round() only accepts numeric, not double precision/float,
+                # hence the explicit cast (SQLite doesn't care either way).
                 "confidence_score": func.round(
-                    EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * LearnerModel.confidence_score, 4
+                    cast(EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * LearnerModel.confidence_score, Numeric), 4
                 ),
             }
             if pace_signal is not None:
                 score_updates["pace_score"] = func.round(
-                    EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * LearnerModel.pace_score, 4
+                    cast(EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * LearnerModel.pace_score, Numeric), 4
                 )
 
             db.execute(sa_update(LearnerModel).where(LearnerModel.learner_id == req.learner_id).values(**score_updates))
