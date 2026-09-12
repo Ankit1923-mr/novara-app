@@ -20,7 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import update as sa_update, func, cast, Numeric
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.exc import StaleDataError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -126,6 +125,11 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
     learner.recently_seen = []
     learner.total_turns = 0
     learner.repair_counts = {}
+    # Bumped unconditionally, even if purpose/level end up unchanged from
+    # before - this is what /conversation's stale-write guard compares
+    # against, and it must change on every reset regardless of the new
+    # values, not just when they differ from the old ones.
+    learner.profile_generation = (learner.profile_generation or 0) + 1
     db.commit()
 
     # A fresh profile means a fresh conversation, too — otherwise the LLM
@@ -190,8 +194,11 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
     # Captured so that if /profile resets this learner while this request
     # is still in flight (e.g. a slow LLM call), we can detect it below and
     # discard this turn's effect rather than applying a stale update to the
-    # learner's brand-new profile.
-    initial_purpose = learner.purpose
+    # learner's brand-new profile. profile_generation, not purpose, is the
+    # correct guard: purpose alone misses a same-purpose reset (trip -> trip)
+    # or an A->B->A sequence that lands back on the original value, since
+    # both leave purpose looking unchanged even though a reset happened.
+    initial_generation = learner.profile_generation
 
     # The LLM call and repair detection don't depend on the learner's
     # current scores, so they run once - only the score/counter update
@@ -235,29 +242,29 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         # and writes the column atomically per row — there is no read-then-
         # write window in Python for a concurrent request to land in, unlike
         # loading the value, computing in Python, and writing it back.
-        # version_id is bumped manually here (this executes as SQLAlchemy
-        # Core, which bypasses the ORM's automatic version_id_col handling)
-        # so the optimistic check below on repair_counts can still detect
-        # a conflict against this update.
         confidence_signal = UNCONFIDENT_SIGNAL if repair_result is not None else CONFIDENT_SIGNAL
         pace_signal = pace_signal_from_response_time(req.response_time_ms) if req.response_time_ms is not None else None
 
-        # repair_counts is a JSON dict — not expressible as a single portable
-        # SQL arithmetic expression across SQLite/Postgres, so it still needs
-        # an optimistic read-modify-write retry. total_turns/scores are
-        # recomputed fresh each attempt too, since a retry means the row
-        # changed since our last attempt in this same request.
+        # Everything (total_turns, scores, repair_counts, version bump) is
+        # applied in ONE UPDATE per attempt, guarded by
+        # "WHERE version_id = :expected AND profile_generation = :expected"
+        # in the statement itself — not a preceding SELECT. That distinction
+        # matters: a guard checked via a separate read-then-compare has a
+        # race window between the check and the write where a reset could
+        # still land; a guard baked into the UPDATE's own WHERE clause is
+        # evaluated by the database atomically as part of executing that
+        # one statement, so nothing can slip in between "check" and "write"
+        # because there is no gap - they're the same operation.
+        # rowcount == 0 after executing means one of two things: another
+        # /conversation call for this learner committed first (version_id
+        # moved - legitimate race, retry with fresh values) or /profile
+        # reset this learner (profile_generation moved - not a race to
+        # retry, the turn's effect must be discarded entirely).
         for attempt in range(CONVERSATION_UPDATE_MAX_RETRIES):
-            # If /profile reset this learner while we were mid-flight (e.g.
-            # a slow LLM call), their purpose has changed underneath us.
-            # Applying our stale turn's counters to the fresh profile would
-            # be wrong - discard this turn's effect and just return the
-            # reply, rather than retrying onto a profile this request never
-            # actually ran against.
-            fresh_check = db.get(LearnerModel, req.learner_id)
-            if fresh_check is not None:
-                db.refresh(fresh_check)
-            if fresh_check is None or fresh_check.purpose != initial_purpose:
+            current = db.get(LearnerModel, req.learner_id)
+            if current is not None:
+                db.refresh(current)
+            if current is None or current.profile_generation != initial_generation:
                 remove_turn_from_history(req.learner_id, req.scenario_id, appended_messages)
                 return ConversationResponse(
                     reply=reply,
@@ -265,38 +272,41 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                     repair=RepairDetail(**repair_result) if repair_result else None,
                 )
 
-            score_updates = {
-                "total_turns": LearnerModel.total_turns + 1,
-                "version_id": LearnerModel.version_id + 1,
+            repair_counts = dict(current.repair_counts)
+            if repair_result is not None:
+                error_type = repair_result["error_type"]
+                repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
+
+            values = {
+                "total_turns": current.total_turns + 1,
+                "version_id": current.version_id + 1,
+                "repair_counts": repair_counts,
                 # rounded to 4dp to match update_scores()'s own rounding —
                 # otherwise floating-point drift compounds differently
                 # between the two code paths over repeated turns. Postgres's
                 # round() only accepts numeric, not double precision/float,
                 # hence the explicit cast (SQLite doesn't care either way).
                 "confidence_score": func.round(
-                    cast(EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * LearnerModel.confidence_score, Numeric), 4
+                    cast(EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * current.confidence_score, Numeric), 4
                 ),
             }
             if pace_signal is not None:
-                score_updates["pace_score"] = func.round(
-                    cast(EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * LearnerModel.pace_score, Numeric), 4
+                values["pace_score"] = func.round(
+                    cast(EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * current.pace_score, Numeric), 4
                 )
 
-            db.execute(sa_update(LearnerModel).where(LearnerModel.learner_id == req.learner_id).values(**score_updates))
-
-            if repair_result is not None:
-                current = db.get(LearnerModel, req.learner_id)
-                db.refresh(current)  # see this transaction's own just-executed update above
-                error_type = repair_result["error_type"]
-                repair_counts = dict(current.repair_counts)
-                repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
-                current.repair_counts = repair_counts
-
-            try:
-                db.commit()
+            result = db.execute(
+                sa_update(LearnerModel)
+                .where(
+                    LearnerModel.learner_id == req.learner_id,
+                    LearnerModel.version_id == current.version_id,
+                    LearnerModel.profile_generation == initial_generation,
+                )
+                .values(**values)
+            )
+            db.commit()
+            if result.rowcount == 1:
                 break
-            except StaleDataError:
-                db.rollback()
         else:
             raise HTTPException(
                 status_code=409,

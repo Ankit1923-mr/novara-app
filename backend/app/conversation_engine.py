@@ -104,9 +104,22 @@ def remove_turn_from_history(learner_id: str, scenario_id: str, messages: list[d
     turns can easily share identical content, e.g. two learners both
     typing "hola", and value-based removal could delete the wrong one).
     Safe under concurrent turns on the same (learner, scenario): a
-    sibling's messages are different objects and are left untouched."""
+    sibling's messages are different objects and are left untouched.
+
+    Mutates the list IN PLACE (never HISTORY[key] = <new list>). A
+    still-running sibling call obtained its `history` reference via
+    HISTORY.setdefault(key, [...]) before this runs, and holds that
+    same list object directly (not a fresh lookup of HISTORY[key]) for
+    the rest of its own handle_turn() call. Rebinding HISTORY[key] to a
+    replacement list would silently detach that reference: the sibling
+    would go on to append its own (possibly successful) turn to the
+    OLD list object, which is no longer the one anyone reads from -
+    its result would be invisibly lost, not just delayed."""
     key = (learner_id, scenario_id)
-    if key not in HISTORY:
+    history = HISTORY.get(key)
+    if history is None:
         return
     ids_to_remove = {id(m) for m in messages}
-    HISTORY[key] = [m for m in HISTORY[key] if id(m) not in ids_to_remove]
+    for i in range(len(history) - 1, -1, -1):
+        if id(history[i]) in ids_to_remove:
+            del history[i]

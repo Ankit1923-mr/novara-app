@@ -20,6 +20,13 @@ class LearnerModel(Base):
     # write in Python has no such protection on its own. See the retry
     # loop in main.py's /conversation handler.
     version_id = Column(Integer, nullable=False, default=0)
+    # Bumped on every /profile call, regardless of whether purpose/level
+    # actually changed value. Comparing purpose alone to detect "did a
+    # reset happen while my /conversation request was in flight" fails
+    # for a same-purpose reset (trip -> trip) or an A->B->A sequence that
+    # lands back on the original purpose - profile_generation always
+    # changes, so it's what /conversation's stale-write guard checks.
+    profile_generation = Column(Integer, nullable=False, default=0)
     purpose = Column(String, nullable=False)
     interests = Column(JSON, default=list)
     weak_areas = Column(JSON, default=list)
