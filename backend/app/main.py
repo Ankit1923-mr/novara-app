@@ -3,12 +3,15 @@ NOVARA backend.
 
 All six modules are wired to real logic: Knowledge Graph, Adaptive
 Learning Engine, AI Conversation Partner, Repair Engine, Personalization
-Engine, and Readiness Scoring Engine. See docs/api-contract.md for the
-frozen shapes.
+Engine, and Readiness Scoring Engine. Learner and scenario state persists
+in Postgres (Supabase) via SQLAlchemy — see db.py and db_models.py.
+See docs/api-contract.md for the frozen request/response shapes.
 """
 
-from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from app.models import (
     ProfileRequest,
@@ -26,8 +29,16 @@ from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
 from app.personalization_engine import update_scores
 from app.readiness_engine import compute_readiness
+from app.db import get_db, init_db
+from app.db_models import LearnerModel, ScenarioModel
 
-app = FastAPI(title="NOVARA API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="NOVARA API", lifespan=lifespan)
 
 # Wide open for MVP demo purposes — the Android app has no fixed origin
 # during development (emulator, physical device, different networks).
@@ -40,15 +51,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory learner store for MVP. learner_id -> {purpose, interests,
-# weak_areas, pace_score, confidence_score, recently_seen: list[str],
-# total_turns: int, repair_counts: dict[str, int]}.
-# Swap for a real DB once persistence matters beyond a demo session.
-LEARNERS: dict[str, dict] = {}
 
-# scenario_id -> scenario dict, so /conversation can look up the scenario
-# a learner is currently in without the client re-sending the full object.
-SCENARIOS: dict[str, dict] = {}
+def _scenario_model_to_dict(s: ScenarioModel) -> dict:
+    return {
+        "scenario_id": s.scenario_id,
+        "purpose": s.purpose,
+        "title": s.title,
+        "setting": s.setting,
+        "situation_tags": s.situation_tags,
+        "opening_line": s.opening_line,
+    }
 
 
 @app.get("/")
@@ -57,17 +69,22 @@ def health_check():
 
 
 @app.post("/profile", response_model=ProfileResponse)
-def create_profile(req: ProfileRequest):
-    LEARNERS[req.learner_id] = {
-        "purpose": req.purpose,
-        "interests": req.interests,
-        "weak_areas": req.weak_areas,
-        "pace_score": 0.5,
-        "confidence_score": 0.5,
-        "recently_seen": [],
-        "total_turns": 0,
-        "repair_counts": {},
-    }
+def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
+    learner = db.get(LearnerModel, req.learner_id)
+    if learner is None:
+        learner = LearnerModel(learner_id=req.learner_id)
+        db.add(learner)
+
+    learner.purpose = req.purpose
+    learner.interests = req.interests
+    learner.weak_areas = req.weak_areas
+    learner.pace_score = 0.5
+    learner.confidence_score = 0.5
+    learner.recently_seen = []
+    learner.total_turns = 0
+    learner.repair_counts = {}
+    db.commit()
+
     return ProfileResponse(
         learner_id=req.learner_id,
         profile_created=True,
@@ -78,36 +95,49 @@ def create_profile(req: ProfileRequest):
 
 
 @app.get("/scenario", response_model=ScenarioResponse)
-def get_scenario(learner_id: str):
-    learner = LEARNERS.get(learner_id)
+def get_scenario(learner_id: str, db: Session = Depends(get_db)):
+    learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
 
     scenario = build_scenario(
         learner_id=learner_id,
-        purpose=learner["purpose"],
-        interests=learner["interests"],
-        weak_areas=learner["weak_areas"],
-        recently_seen=learner["recently_seen"],
+        purpose=learner.purpose,
+        interests=learner.interests,
+        weak_areas=learner.weak_areas,
+        recently_seen=learner.recently_seen,
     )
 
+    recently_seen = list(learner.recently_seen)
     for tag in scenario["situation_tags"]:
-        if tag not in learner["recently_seen"]:
-            learner["recently_seen"].append(tag)
+        if tag not in recently_seen:
+            recently_seen.append(tag)
+    learner.recently_seen = recently_seen
 
-    SCENARIOS[scenario["scenario_id"]] = scenario
+    scenario_row = db.get(ScenarioModel, scenario["scenario_id"])
+    if scenario_row is None:
+        scenario_row = ScenarioModel(scenario_id=scenario["scenario_id"])
+        db.add(scenario_row)
+    scenario_row.purpose = scenario["purpose"]
+    scenario_row.title = scenario["title"]
+    scenario_row.setting = scenario["setting"]
+    scenario_row.situation_tags = scenario["situation_tags"]
+    scenario_row.opening_line = scenario["opening_line"]
+
+    db.commit()
     return ScenarioResponse(**scenario)
 
 
 @app.post("/conversation", response_model=ConversationResponse)
-def post_conversation(req: ConversationRequest):
-    learner = LEARNERS.get(req.learner_id)
+def post_conversation(req: ConversationRequest, db: Session = Depends(get_db)):
+    learner = db.get(LearnerModel, req.learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
 
-    scenario = SCENARIOS.get(req.scenario_id)
-    if scenario is None:
+    scenario_row = db.get(ScenarioModel, req.scenario_id)
+    if scenario_row is None:
         raise HTTPException(status_code=404, detail="scenario_id not found — call /scenario first")
+    scenario = _scenario_model_to_dict(scenario_row)
 
     reply = handle_turn(
         learner_id=req.learner_id,
@@ -128,19 +158,23 @@ def post_conversation(req: ConversationRequest):
     candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
     repair_result = detect_repair(req.message, candidate_patterns)
 
-    learner["total_turns"] += 1
+    learner.total_turns += 1
     if repair_result is not None:
         error_type = repair_result["error_type"]
-        learner["repair_counts"][error_type] = learner["repair_counts"].get(error_type, 0) + 1
+        repair_counts = dict(learner.repair_counts)
+        repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
+        learner.repair_counts = repair_counts
 
     updated_scores = update_scores(
-        pace_score=learner["pace_score"],
-        confidence_score=learner["confidence_score"],
+        pace_score=learner.pace_score,
+        confidence_score=learner.confidence_score,
         repair_triggered=repair_result is not None,
         response_time_ms=req.response_time_ms,
     )
-    learner["pace_score"] = updated_scores["pace_score"]
-    learner["confidence_score"] = updated_scores["confidence_score"]
+    learner.pace_score = updated_scores["pace_score"]
+    learner.confidence_score = updated_scores["confidence_score"]
+
+    db.commit()
 
     return ConversationResponse(
         reply=reply,
@@ -156,20 +190,20 @@ def post_repair(req: RepairRequest):
 
 
 @app.get("/readiness", response_model=ReadinessResponse)
-def get_readiness(learner_id: str):
+def get_readiness(learner_id: str, db: Session = Depends(get_db)):
     if not learner_id:
         raise HTTPException(status_code=400, detail="learner_id required")
 
-    learner = LEARNERS.get(learner_id)
+    learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
 
-    total_known_situations = len(list_situations(learner["purpose"]))
+    total_known_situations = len(list_situations(learner.purpose))
     result = compute_readiness(
-        purpose=learner["purpose"],
-        total_turns=learner["total_turns"],
-        repair_counts=learner["repair_counts"],
-        distinct_situations_visited=len(learner["recently_seen"]),
+        purpose=learner.purpose,
+        total_turns=learner.total_turns,
+        repair_counts=learner.repair_counts,
+        distinct_situations_visited=len(learner.recently_seen),
         total_known_situations=total_known_situations,
     )
 

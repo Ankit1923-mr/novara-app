@@ -89,3 +89,15 @@ A third issue surfaced after that: a comprehension marker ("repetir") legitimate
 **Also decided**: purpose-specific weights, not a single fixed formula (the rubric's "novel component" requirement) — Trip purpose weights `transfer_success` heaviest (a traveler needs breadth across many unplanned situations, register mistakes are more forgivable), Casual purpose weights `register_appropriateness` heaviest (sounding socially natural with recurring peers matters more than covering many disconnected situations). Documented directly in `readiness_engine.py`'s comments so the reasoning doesn't need to be reconstructed later for the report.
 
 **Result**: 10 new readiness_engine tests including the baseline check (3 synthetic high/mid/low-performing learners rank correctly, tested for both purposes) + 3 new endpoint tests verifying real repair history moves the score. All 6 backend modules are now wired to real logic. 83/83 passing.
+
+### [2026-09-12] Postgres persistence: connection string and test isolation
+
+**Problem**: All learner/scenario data lived in in-memory Python dicts (`LEARNERS`, `SCENARIOS` in `main.py`) — wiped on every server restart or Render redeploy. Needed real persistence via Supabase (Postgres).
+
+Two connection issues before it worked:
+1. Supabase's direct-connection hostname (`db.<ref>.supabase.co`) didn't resolve — it requires IPv6, which isn't available on this network (or on Render). Fixed by using Supabase's **transaction-mode pooler** hostname instead (`aws-0-<region>.pooler.supabase.com:6543`), which supports IPv4. Username also changes shape for the pooler: `postgres.<project-ref>` instead of plain `postgres`.
+2. The database password contained special characters (`#`, `*`, `&`) that broke the connection URI until percent-encoded (`%23`, `%2A`, `%26`).
+
+**Decision**: Built the DB layer (`db.py`, `db_models.py`) with a lazily-constructed engine (same pattern as `llm_client.py`'s lazy client) so the test suite could override `DATABASE_URL` to an in-memory SQLite database via a `conftest.py` fixture — tests never touch the real Supabase instance or require network access. SQLite's `:memory:` mode needed an explicit `StaticPool` in SQLAlchemy, since without it every new connection (one per request) gets its own blank database and nothing persists across requests within a single test run.
+
+**Result**: All 6 endpoints migrated from dict access to SQLAlchemy ORM queries (`LearnerModel`, `ScenarioModel`). Verified against the real Supabase instance with a direct psycopg2 query proving the row persisted independently of the running process (not just readable within the same request). 83/83 tests still passing on the SQLite fallback, unchanged in behavior. `DATABASE_URL` stored only in `backend/.env` (gitignored) — same handling as the API keys.

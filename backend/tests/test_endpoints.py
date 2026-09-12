@@ -1,8 +1,20 @@
 from fastapi.testclient import TestClient
-from app.main import app, LEARNERS
+from app.main import app
+from app.db import get_session_factory
+from app.db_models import LearnerModel
 import app.llm_client as llm_client
 
 client = TestClient(app)
+
+
+def _get_learner_row(learner_id: str) -> LearnerModel:
+    """Test helper: reads a learner row directly from the DB, since
+    pace_score/confidence_score aren't exposed by any endpoint response."""
+    db = get_session_factory()()
+    try:
+        return db.get(LearnerModel, learner_id)
+    finally:
+        db.close()
 
 
 def test_profile():
@@ -78,16 +90,18 @@ def test_conversation_updates_personalization_scores(monkeypatch):
     })
     scenario_id = client.get("/scenario", params={"learner_id": "u_personalization"}).json()["scenario_id"]
 
-    before_pace = LEARNERS["u_personalization"]["pace_score"]
-    before_confidence = LEARNERS["u_personalization"]["confidence_score"]
+    before = _get_learner_row("u_personalization")
+    before_pace = before.pace_score
+    before_confidence = before.confidence_score
 
     client.post("/conversation", json={
         "learner_id": "u_personalization", "scenario_id": scenario_id,
         "message": "no entiendo", "turn_number": 1, "response_time_ms": 500,
     })
 
-    after_pace = LEARNERS["u_personalization"]["pace_score"]
-    after_confidence = LEARNERS["u_personalization"]["confidence_score"]
+    after = _get_learner_row("u_personalization")
+    after_pace = after.pace_score
+    after_confidence = after.confidence_score
 
     assert after_pace > before_pace  # fast response (500ms) raises pace
     assert after_confidence < before_confidence  # "no entiendo" triggers repair, lowers confidence
