@@ -101,3 +101,18 @@ Two connection issues before it worked:
 **Decision**: Built the DB layer (`db.py`, `db_models.py`) with a lazily-constructed engine (same pattern as `llm_client.py`'s lazy client) so the test suite could override `DATABASE_URL` to an in-memory SQLite database via a `conftest.py` fixture — tests never touch the real Supabase instance or require network access. SQLite's `:memory:` mode needed an explicit `StaticPool` in SQLAlchemy, since without it every new connection (one per request) gets its own blank database and nothing persists across requests within a single test run.
 
 **Result**: All 6 endpoints migrated from dict access to SQLAlchemy ORM queries (`LearnerModel`, `ScenarioModel`). Verified against the real Supabase instance with a direct psycopg2 query proving the row persisted independently of the running process (not just readable within the same request). 83/83 tests still passing on the SQLite fallback, unchanged in behavior. `DATABASE_URL` stored only in `backend/.env` (gitignored) — same handling as the API keys.
+
+### [2026-09-12] Demo-safety hardening: auth, rate limiting, input validation
+
+**Context**: Ran the remaining-work prioritization through an LLM council (5 independent advisor perspectives + peer review + synthesis) rather than deciding solo. All 5 advisors and all 5 peer reviews independently converged on the same conclusion: skip the ML-trained repair engine and expanded purposes (scope creep with no demo-visible payoff), and treat auth + rate limiting + edge-case hardening as non-negotiable, because the live backend was public with zero protection — a real risk of the free-tier LLM quota being burned or the demo breaking mid-review.
+
+**What was built**:
+1. **API key auth** (`auth.py`) — every endpoint except the health check requires an `X-API-Key` header matching a shared secret. Deliberately simple (one static key, not per-user auth) — this project doesn't need real user accounts, it needs to stop a stranger who finds the URL from writing junk data or draining the LLM quota.
+2. **Rate limiting** (`slowapi`) — 20/minute on `/conversation` specifically (the LLM-costly endpoint), 100/minute default on everything else, keyed per-IP.
+3. **Input validation hardening** (`models.py`) — length limits on all string/list fields, positive-only `turn_number`, non-negative `response_time_ms`. Plus a global exception handler so any unhandled bug returns a clean `{error, code}` JSON response instead of a raw Python traceback leaking file paths and internals to a client.
+
+**Bug found while testing rate limiting**: FastAPI's `TestClient` reports the same fake IP ("testclient") for every request, so all tests hitting `/conversation` shared one rate-limit bucket — an early test exhausting the 20/minute quota caused unrelated *later* tests to fail with 429s they had nothing to do with. Fixed with an autouse `conftest.py` fixture that resets the limiter's storage before every test.
+
+**Second bug while testing the exception handler**: `TestClient` re-raises server exceptions by default (`raise_server_exceptions=True`) rather than returning the response a real client would see — useful for catching bugs in most tests, but it meant the first attempt at testing the 500 handler saw the raw exception instead of the clean JSON response. Fixed by using a second `TestClient` instance with `raise_server_exceptions=False` for that specific test.
+
+**Result**: 14 new tests (3 auth, 1 rate-limit, 9 validation, 1 exception-handler) — 97/97 passing. Verified against the real Supabase-backed local server: request without a key correctly returns 401, request with the key returns 200.

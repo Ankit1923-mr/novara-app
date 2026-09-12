@@ -2,9 +2,10 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.db import get_session_factory
 from app.db_models import LearnerModel
+from tests.conftest import TEST_API_KEY
 import app.llm_client as llm_client
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-API-Key": TEST_API_KEY})
 
 
 def _get_learner_row(learner_id: str) -> LearnerModel:
@@ -15,6 +16,119 @@ def _get_learner_row(learner_id: str) -> LearnerModel:
         return db.get(LearnerModel, learner_id)
     finally:
         db.close()
+
+
+def test_health_check_does_not_require_api_key():
+    unauthenticated_client = TestClient(app)  # no X-API-Key header at all
+    r = unauthenticated_client.get("/")
+    assert r.status_code == 200
+
+
+def test_missing_api_key_is_rejected():
+    unauthenticated_client = TestClient(app)
+    r = unauthenticated_client.post("/profile", json={
+        "learner_id": "should_not_be_created", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 401
+
+
+def test_wrong_api_key_is_rejected():
+    wrong_key_client = TestClient(app, headers={"X-API-Key": "definitely-not-the-real-key"})
+    r = wrong_key_client.post("/profile", json={
+        "learner_id": "should_not_be_created", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 401
+
+
+def test_profile_rejects_empty_learner_id():
+    r = client.post("/profile", json={
+        "learner_id": "", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 422
+
+
+def test_profile_rejects_oversized_learner_id():
+    r = client.post("/profile", json={
+        "learner_id": "x" * 101, "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 422
+
+
+def test_profile_rejects_too_many_interests():
+    r = client.post("/profile", json={
+        "learner_id": "u_edge", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": ["x"] * 21, "weak_areas": []
+    })
+    assert r.status_code == 422
+
+
+def test_profile_rejects_invalid_purpose():
+    r = client.post("/profile", json={
+        "learner_id": "u_edge", "level": "A2", "region": "Madrid",
+        "purpose": "exam", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 422
+
+
+def test_conversation_rejects_empty_message():
+    r = client.post("/conversation", json={
+        "learner_id": "u1", "scenario_id": "anything", "message": "", "turn_number": 1
+    })
+    assert r.status_code == 422
+
+
+def test_conversation_rejects_oversized_message():
+    r = client.post("/conversation", json={
+        "learner_id": "u1", "scenario_id": "anything", "message": "x" * 1001, "turn_number": 1
+    })
+    assert r.status_code == 422
+
+
+def test_conversation_rejects_non_positive_turn_number():
+    r = client.post("/conversation", json={
+        "learner_id": "u1", "scenario_id": "anything", "message": "hola", "turn_number": 0
+    })
+    assert r.status_code == 422
+
+
+def test_scenario_rejects_empty_learner_id_param():
+    r = client.get("/scenario", params={"learner_id": ""})
+    assert r.status_code == 422
+
+
+def test_readiness_rejects_empty_learner_id_param():
+    r = client.get("/readiness", params={"learner_id": ""})
+    assert r.status_code == 422
+
+
+def test_unhandled_exception_returns_clean_500_not_a_raw_traceback(monkeypatch):
+    import app.main as main_module
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated internal failure")
+
+    monkeypatch.setattr(main_module, "build_scenario", _boom)
+
+    # TestClient re-raises server exceptions by default (raise_server_exceptions=True) -
+    # useful for catching bugs in most tests, but it hides the actual HTTP response a
+    # real deployment would send. Disable it here to observe what a real client gets.
+    non_raising_client = TestClient(app, headers={"X-API-Key": TEST_API_KEY}, raise_server_exceptions=False)
+
+    non_raising_client.post("/profile", json={
+        "learner_id": "u_crash_test", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    r = non_raising_client.get("/scenario", params={"learner_id": "u_crash_test"})
+
+    assert r.status_code == 500
+    body = r.json()
+    assert body == {"error": "An unexpected error occurred.", "code": "INTERNAL_ERROR"}
+    assert "RuntimeError" not in r.text
+    assert "Traceback" not in r.text
 
 
 def test_profile():
@@ -114,6 +228,29 @@ def test_repair():
     assert r.status_code == 200
     assert r.json()["error_type"] in ["lexical", "grammar", "register", "comprehension"]
     assert r.json()["strategy"] in ["clarify", "rephrase", "hint"]
+
+
+def test_conversation_rate_limit_triggers_after_20_requests_per_minute(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY_BACKUP", raising=False)
+    monkeypatch.setattr(llm_client, "_clients", None)
+
+    client.post("/profile", json={
+        "learner_id": "u_ratelimit", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": ["food"], "weak_areas": []
+    })
+    scenario_id = client.get("/scenario", params={"learner_id": "u_ratelimit"}).json()["scenario_id"]
+
+    statuses = []
+    for i in range(25):
+        r = client.post("/conversation", json={
+            "learner_id": "u_ratelimit", "scenario_id": scenario_id,
+            "message": "hola", "turn_number": i + 1
+        })
+        statuses.append(r.status_code)
+
+    assert 429 in statuses, "expected at least one 429 after exceeding 20/minute on /conversation"
+    assert statuses[:20].count(200) == 20, "first 20 requests within the limit should all succeed"
 
 
 def test_conversation_flags_repair_on_comprehension_signal(monkeypatch):

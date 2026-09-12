@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
 Purpose = Literal["trip", "casual"]
@@ -6,15 +6,22 @@ Level = Literal["A1", "A2", "B1", "B2"]
 ErrorType = Literal["lexical", "grammar", "register", "comprehension"]
 Strategy = Literal["clarify", "rephrase", "hint"]
 
+# Shared bounds — kept as named constants so the reasoning behind each
+# limit lives in one place instead of being a bare number wherever it's used.
+MAX_ID_LENGTH = 100          # learner_id / scenario_id
+MAX_SHORT_TEXT_LENGTH = 200  # region, single utterances used for matching
+MAX_MESSAGE_LENGTH = 1000    # a conversation turn or repair sample — generous for a sentence, not a paste
+MAX_LIST_ITEMS = 20          # interests / weak_areas — no real learner needs more than this
+
 
 class ProfileRequest(BaseModel):
-    learner_id: str
+    learner_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
     language: str = "spanish"
     level: Level
-    region: str
+    region: str = Field(min_length=1, max_length=MAX_SHORT_TEXT_LENGTH)
     purpose: Purpose
-    interests: list[str] = []
-    weak_areas: list[str] = []
+    interests: list[str] = Field(default=[], max_length=MAX_LIST_ITEMS)
+    weak_areas: list[str] = Field(default=[], max_length=MAX_LIST_ITEMS)
 
 
 class ProfileResponse(BaseModel):
@@ -35,11 +42,11 @@ class ScenarioResponse(BaseModel):
 
 
 class ConversationRequest(BaseModel):
-    learner_id: str
-    scenario_id: str
-    message: str
-    turn_number: int
-    response_time_ms: Optional[int] = None  # optional: how long the learner took to answer, feeds Personalization Engine's pace score
+    learner_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
+    scenario_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
+    turn_number: int = Field(gt=0)
+    response_time_ms: Optional[int] = Field(default=None, ge=0)  # optional: how long the learner took to answer, feeds Personalization Engine's pace score
 
 
 class RepairDetail(BaseModel):
@@ -55,8 +62,8 @@ class ConversationResponse(BaseModel):
 
 
 class RepairRequest(BaseModel):
-    learner_utterance: str
-    expected_pattern: str
+    learner_utterance: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
+    expected_pattern: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
 
 
 class ReadinessResponse(BaseModel):

@@ -151,7 +151,24 @@ Send a learner message, get the AI partner's reply + repair flag if triggered.
   "code": "string, e.g. LEARNER_NOT_FOUND"
 }
 ```
-HTTP status: 400 (bad input) / 404 (not found) / 500 (server error).
+HTTP status: 401 (missing/invalid API key) / 404 (not found) / 422 (request failed validation — e.g. empty/too-long field, missing required field) / 429 (rate limit exceeded) / 500 (server error, unhandled).
+
+## Authentication
+
+Every endpoint except `GET /` requires an `X-API-Key` header matching the shared key (distributed separately, never committed — see backend/.env). A missing or wrong key returns 401.
+
+## Rate limits
+
+`POST /conversation`: 20 requests/minute (protects the free-tier LLM quota). All other endpoints: 100 requests/minute (shared default). Exceeding either returns 429.
+
+## Field limits (validation, 422 if violated)
+
+- `learner_id`, `scenario_id`: 1–100 characters
+- `message`, `learner_utterance`, `expected_pattern`: 1–1000 characters
+- `region`: 1–200 characters
+- `interests`, `weak_areas`: max 20 items each
+- `turn_number`: must be > 0
+- `response_time_ms`: must be ≥ 0 if provided
 
 ---
 

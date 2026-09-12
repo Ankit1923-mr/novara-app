@@ -5,13 +5,24 @@ All six modules are wired to real logic: Knowledge Graph, Adaptive
 Learning Engine, AI Conversation Partner, Repair Engine, Personalization
 Engine, and Readiness Scoring Engine. Learner and scenario state persists
 in Postgres (Supabase) via SQLAlchemy — see db.py and db_models.py.
+
+Every endpoint except the health check requires an X-API-Key header
+matching NOVARA_API_KEY (see auth.py) — the live deployment is public,
+and this is what stops a stranger from burning the free-tier LLM quota
+or filling the database with junk learners.
+
 See docs/api-contract.md for the frozen request/response shapes.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.models import (
     ProfileRequest,
@@ -22,6 +33,7 @@ from app.models import (
     RepairDetail,
     RepairRequest,
     ReadinessResponse,
+    MAX_ID_LENGTH,
 )
 from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn
@@ -31,6 +43,7 @@ from app.personalization_engine import update_scores
 from app.readiness_engine import compute_readiness
 from app.db import get_db, init_db
 from app.db_models import LearnerModel, ScenarioModel
+from app.auth import verify_api_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,16 +53,39 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NOVARA API", lifespan=lifespan)
 
-# Wide open for MVP demo purposes — the Android app has no fixed origin
-# during development (emulator, physical device, different networks).
-# Tighten this to specific origins before any real deployment beyond
-# the class demo.
+# Rate limiting — per-IP, since the API key is shared by the whole
+# Android app rather than per-user. Protects the free-tier LLM quota
+# and the database from a runaway client loop or abuse of the public
+# URL (auth stops strangers from writing data, but a legitimate-looking
+# request storm from one source could still exhaust the LLM quota).
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# CORS origin restriction protects browser-based clients (JS enforces
+# same-origin); it does nothing for a native Android app, which sends
+# no Origin header and isn't subject to same-origin policy. Left wide
+# open here deliberately — the real access control is the API key
+# below (verify_api_key), not CORS, since our only client is native.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catches anything not already handled as an HTTPException, so a
+    bug never leaks a raw Python traceback (with file paths, internals)
+    to a client — returns the same {error, code} shape documented for
+    every other error case in docs/api-contract.md."""
+    return JSONResponse(
+        status_code=500,
+        content={"error": "An unexpected error occurred.", "code": "INTERNAL_ERROR"},
+    )
 
 
 def _scenario_model_to_dict(s: ScenarioModel) -> dict:
@@ -68,7 +104,7 @@ def health_check():
     return {"status": "ok", "service": "novara-api"}
 
 
-@app.post("/profile", response_model=ProfileResponse)
+@app.post("/profile", response_model=ProfileResponse, dependencies=[Depends(verify_api_key)])
 def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
     learner = db.get(LearnerModel, req.learner_id)
     if learner is None:
@@ -94,8 +130,8 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/scenario", response_model=ScenarioResponse)
-def get_scenario(learner_id: str, db: Session = Depends(get_db)):
+@app.get("/scenario", response_model=ScenarioResponse, dependencies=[Depends(verify_api_key)])
+def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -128,8 +164,9 @@ def get_scenario(learner_id: str, db: Session = Depends(get_db)):
     return ScenarioResponse(**scenario)
 
 
-@app.post("/conversation", response_model=ConversationResponse)
-def post_conversation(req: ConversationRequest, db: Session = Depends(get_db)):
+@app.post("/conversation", response_model=ConversationResponse, dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+def post_conversation(request: Request, req: ConversationRequest, db: Session = Depends(get_db)):
     learner = db.get(LearnerModel, req.learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -183,17 +220,14 @@ def post_conversation(req: ConversationRequest, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/repair", response_model=RepairDetail)
+@app.post("/repair", response_model=RepairDetail, dependencies=[Depends(verify_api_key)])
 def post_repair(req: RepairRequest):
     result = run_repair(req.learner_utterance, req.expected_pattern)
     return RepairDetail(**result)
 
 
-@app.get("/readiness", response_model=ReadinessResponse)
-def get_readiness(learner_id: str, db: Session = Depends(get_db)):
-    if not learner_id:
-        raise HTTPException(status_code=400, detail="learner_id required")
-
+@app.get("/readiness", response_model=ReadinessResponse, dependencies=[Depends(verify_api_key)])
+def get_readiness(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
