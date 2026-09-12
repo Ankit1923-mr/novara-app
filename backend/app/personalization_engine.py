@@ -43,6 +43,11 @@ def _pace_signal_from_response_time(response_time_ms: int) -> float:
     return 1.0 - (response_time_ms - FAST_MS) / (SLOW_MS - FAST_MS)
 
 
+# Public alias: main.py needs this to build an atomic SQL EMA update
+# (see /conversation) without duplicating the pace-signal formula.
+pace_signal_from_response_time = _pace_signal_from_response_time
+
+
 def update_scores(
     pace_score: float,
     confidence_score: float,

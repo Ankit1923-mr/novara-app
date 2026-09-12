@@ -18,7 +18,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import update as sa_update, func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -36,10 +38,12 @@ from app.models import (
     MAX_ID_LENGTH,
 )
 from app.adaptive_engine import build_scenario
-from app.conversation_engine import handle_turn
+from app.conversation_engine import handle_turn, reset_all_history_for_learner, history_length, truncate_history
 from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
-from app.personalization_engine import update_scores
+from app.personalization_engine import (
+    update_scores, EMA_ALPHA, CONFIDENT_SIGNAL, UNCONFIDENT_SIGNAL, pace_signal_from_response_time,
+)
 from app.readiness_engine import compute_readiness
 from app.db import get_db, init_db
 from app.db_models import LearnerModel, ScenarioModel
@@ -74,6 +78,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+CONVERSATION_UPDATE_MAX_RETRIES = 5
 
 
 @app.exception_handler(Exception)
@@ -120,6 +127,10 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
     learner.total_turns = 0
     learner.repair_counts = {}
     db.commit()
+
+    # A fresh profile means a fresh conversation, too — otherwise the LLM
+    # would see turns from a previous purpose/level as if they still count.
+    reset_all_history_for_learner(req.learner_id)
 
     return ProfileResponse(
         learner_id=req.learner_id,
@@ -176,42 +187,103 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         raise HTTPException(status_code=404, detail="scenario_id not found — call /scenario first")
     scenario = _scenario_model_to_dict(scenario_row)
 
-    reply = handle_turn(
-        learner_id=req.learner_id,
-        scenario=scenario,
-        message=req.message,
-        turn_number=req.turn_number,
-    )
+    # The LLM call and repair detection don't depend on the learner's
+    # current scores, so they run once - only the score/counter update
+    # below needs to be retried under contention.
+    history_len_before = history_length(req.learner_id, req.scenario_id)
+    try:
+        reply = handle_turn(
+            learner_id=req.learner_id,
+            scenario=scenario,
+            message=req.message,
+            turn_number=req.turn_number,
+        )
 
-    # Check the learner's message against the graph phrases relevant to
-    # this scenario's situation tags — detect_repair() decides whether
-    # it's close enough to a known phrase to be worth repairing, exactly
-    # matches (no repair), or is free-form conversation outside any
-    # known phrase (also no repair — the AI partner allows open dialogue).
-    candidate_nodes = [
-        n for tag in scenario["situation_tags"]
-        for n in get_subgraph(scenario["purpose"], situation_tag=tag)
-    ]
-    candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
-    repair_result = detect_repair(req.message, candidate_patterns)
+        # Check the learner's message against the graph phrases relevant to
+        # this scenario's situation tags — detect_repair() decides whether
+        # it's close enough to a known phrase to be worth repairing, exactly
+        # matches (no repair), or is free-form conversation outside any
+        # known phrase (also no repair — the AI partner allows open dialogue).
+        candidate_nodes = [
+            n for tag in scenario["situation_tags"]
+            for n in get_subgraph(scenario["purpose"], situation_tag=tag)
+        ]
+        candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
+        repair_result = detect_repair(req.message, candidate_patterns)
 
-    learner.total_turns += 1
-    if repair_result is not None:
-        error_type = repair_result["error_type"]
-        repair_counts = dict(learner.repair_counts)
-        repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
-        learner.repair_counts = repair_counts
+        # Personalization Engine is still the source of truth for the EMA
+        # formula/signals — called here so its documented role holds even
+        # though the actual persisted write below re-derives the same
+        # formula as a SQL expression rather than trusting this call's
+        # possibly-stale-by-write-time return value (see the atomic update
+        # note just below for why).
+        update_scores(
+            pace_score=learner.pace_score,
+            confidence_score=learner.confidence_score,
+            repair_triggered=repair_result is not None,
+            response_time_ms=req.response_time_ms,
+        )
 
-    updated_scores = update_scores(
-        pace_score=learner.pace_score,
-        confidence_score=learner.confidence_score,
-        repair_triggered=repair_result is not None,
-        response_time_ms=req.response_time_ms,
-    )
-    learner.pace_score = updated_scores["pace_score"]
-    learner.confidence_score = updated_scores["confidence_score"]
+        # Race-free update for total_turns/pace/confidence: expressed as a
+        # single SQL "col = f(col)" statement, so the database itself reads
+        # and writes the column atomically per row — there is no read-then-
+        # write window in Python for a concurrent request to land in, unlike
+        # loading the value, computing in Python, and writing it back.
+        # version_id is bumped manually here (this executes as SQLAlchemy
+        # Core, which bypasses the ORM's automatic version_id_col handling)
+        # so the optimistic check below on repair_counts can still detect
+        # a conflict against this update.
+        confidence_signal = UNCONFIDENT_SIGNAL if repair_result is not None else CONFIDENT_SIGNAL
+        pace_signal = pace_signal_from_response_time(req.response_time_ms) if req.response_time_ms is not None else None
 
-    db.commit()
+        # repair_counts is a JSON dict — not expressible as a single portable
+        # SQL arithmetic expression across SQLite/Postgres, so it still needs
+        # an optimistic read-modify-write retry. total_turns/scores are
+        # recomputed fresh each attempt too, since a retry means the row
+        # changed since our last attempt in this same request.
+        for attempt in range(CONVERSATION_UPDATE_MAX_RETRIES):
+            score_updates = {
+                "total_turns": LearnerModel.total_turns + 1,
+                "version_id": LearnerModel.version_id + 1,
+                # rounded to 4dp to match update_scores()'s own rounding —
+                # otherwise floating-point drift compounds differently
+                # between the two code paths over repeated turns.
+                "confidence_score": func.round(
+                    EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * LearnerModel.confidence_score, 4
+                ),
+            }
+            if pace_signal is not None:
+                score_updates["pace_score"] = func.round(
+                    EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * LearnerModel.pace_score, 4
+                )
+
+            db.execute(sa_update(LearnerModel).where(LearnerModel.learner_id == req.learner_id).values(**score_updates))
+
+            if repair_result is not None:
+                current = db.get(LearnerModel, req.learner_id)
+                db.refresh(current)  # see this transaction's own just-executed update above
+                error_type = repair_result["error_type"]
+                repair_counts = dict(current.repair_counts)
+                repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
+                current.repair_counts = repair_counts
+
+            try:
+                db.commit()
+                break
+            except StaleDataError:
+                db.rollback()
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Too many concurrent updates for this learner — please retry.",
+            )
+    except Exception:
+        # DB changes roll back on their own (session is discarded
+        # without a commit), but the in-memory conversation history
+        # mutated by handle_turn() would otherwise survive a failure
+        # here and diverge from the persisted state - undo it too.
+        truncate_history(req.learner_id, req.scenario_id, history_len_before)
+        raise
 
     return ConversationResponse(
         reply=reply,

@@ -59,3 +59,27 @@ def get_history(learner_id: str, scenario_id: str) -> list[dict]:
 
 def reset_history(learner_id: str, scenario_id: str) -> None:
     HISTORY.pop((learner_id, scenario_id), None)
+
+
+def reset_all_history_for_learner(learner_id: str) -> None:
+    """Called when /profile re-creates a learner (fresh purpose/level/etc.) —
+    without this, old conversation turns from a previous profile would
+    still be sent to the LLM as context on the learner's next turn, even
+    though every other piece of their state was reset."""
+    for key in [k for k in HISTORY if k[0] == learner_id]:
+        del HISTORY[key]
+
+
+def history_length(learner_id: str, scenario_id: str) -> int:
+    return len(HISTORY.get((learner_id, scenario_id), []))
+
+
+def truncate_history(learner_id: str, scenario_id: str, keep_length: int) -> None:
+    """Rolls back history to what it was before a turn that ultimately
+    failed downstream (e.g. a DB commit error after the LLM reply came
+    back) — otherwise the in-memory conversation would diverge from the
+    persisted state, and the LLM would see a turn that officially never
+    happened."""
+    key = (learner_id, scenario_id)
+    if key in HISTORY:
+        HISTORY[key] = HISTORY[key][:keep_length]

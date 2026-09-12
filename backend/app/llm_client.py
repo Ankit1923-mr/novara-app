@@ -116,11 +116,37 @@ def _model_chain() -> list[str]:
     return ordered
 
 
+def _usable_reply(response) -> Optional[str]:
+    """Validates a provider response actually has something worth
+    returning. A malformed response (empty choices, null/empty/
+    non-string content) must be treated as a failure and fall through
+    to the next model/retry, not returned as-is or allowed to crash
+    with an IndexError/AttributeError."""
+    if not response.choices:
+        return None
+    content = response.choices[0].message.content
+    if not isinstance(content, str) or not content.strip():
+        return None
+    return content
+
+
 def _try_model_chain(client, chat_messages: list[dict]) -> tuple[Optional[str], Optional[Exception]]:
     """Runs the full model chain (with per-model retry) against one
     client. Returns (reply, None) on success or (None, last_error) if
     every model failed under this client."""
     import openai
+
+    # Transient failures - the provider is temporarily unreachable/overloaded/
+    # rate-limited, not permanently wrong. Worth a retry, then move on to
+    # the next model in the chain rather than propagating and turning into
+    # our own 500 - a provider hiccup should degrade to the offline
+    # fallback, never an application error.
+    TRANSIENT_ERRORS = (
+        openai.RateLimitError,
+        openai.APITimeoutError,
+        openai.APIConnectionError,
+        openai.InternalServerError,
+    )
 
     last_error: Optional[Exception] = None
     for model in _model_chain():
@@ -131,8 +157,14 @@ def _try_model_chain(client, chat_messages: list[dict]) -> tuple[Optional[str], 
                     max_tokens=MAX_TOKENS,
                     messages=chat_messages,
                 )
-                return response.choices[0].message.content, None
-            except openai.RateLimitError as e:
+                reply = _usable_reply(response)
+                if reply is not None:
+                    return reply, None
+                # malformed content from an otherwise-successful call - treat
+                # like a transient failure rather than crashing or echoing junk
+                last_error = ValueError(f"unusable response content from model {model}")
+                break
+            except TRANSIENT_ERRORS as e:
                 last_error = e
                 if attempt < RETRIES_PER_MODEL:
                     time.sleep(BACKOFF_SECONDS)
@@ -168,12 +200,15 @@ def call_llm(system_prompt: str, messages: list[dict], client: Optional[object] 
         return "[offline] OPENROUTER_API_KEY not set — set it in backend/.env to get real replies."
 
     chat_messages = [{"role": "system", "content": system_prompt}] + messages
-    last_error: Optional[Exception] = None
 
     for label, active_client in clients:
-        reply, error = _try_model_chain(active_client, chat_messages)
+        reply, _error = _try_model_chain(active_client, chat_messages)
         if reply is not None:
             return reply
-        last_error = error
 
-    return f"[offline] all keys and fallback models exhausted ({last_error}) — try again shortly."
+    # Deliberately generic: never interpolate the raw provider exception
+    # into a client-visible message - it can carry the provider's own
+    # error text (which itself might echo back request details) straight
+    # through to whoever is looking at the app. The real error is still
+    # available server-side to whoever calls call_llm with logging.
+    return "[offline] the AI assistant is temporarily unavailable — please try again shortly."

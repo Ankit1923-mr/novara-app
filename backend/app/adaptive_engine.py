@@ -97,7 +97,11 @@ def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]]
     opening_line = nodes[0]["phrase"] if nodes else "Hola."
 
     return {
-        "scenario_id": f"scenario-{tag}",
+        # purpose is part of the identity, not just the tag - "food" exists
+        # under both trip and casual, and without this a scenario built for
+        # one purpose could collide with (and be silently overwritten by)
+        # one built for the other, since scenario_id is the DB primary key.
+        "scenario_id": f"scenario-{purpose}-{tag}",
         "purpose": purpose,
         "title": meta["title"],
         "setting": meta["setting"],
