@@ -36,21 +36,49 @@ def build_system_prompt(scenario: dict) -> str:
 
 
 def handle_turn(learner_id: str, scenario: dict, message: str, turn_number: int,
-                 client: Optional[object] = None) -> str:
+                 client: Optional[object] = None) -> tuple[str, list[dict]]:
+    """Returns (reply, appended_messages) — the caller keeps `appended_messages`
+    so that if something downstream fails, it can roll back exactly the
+    entries THIS call added via remove_turn_from_history(), rather than
+    truncating the shared list by length (unsafe: a concurrent sibling
+    call for the same learner+scenario may have appended its own turn
+    in between, and length-based truncation would silently delete it too)."""
     key = (learner_id, scenario["scenario_id"])
+    scenario_id = scenario["scenario_id"]
     history = HISTORY.setdefault(key, [])
+    appended: list[dict] = []
 
-    if turn_number == 1 and not history:
-        # Seed with the scenario's opening line as the assistant's first turn
-        history.append({"role": "assistant", "content": scenario["opening_line"]})
+    try:
+        if turn_number == 1 and not history:
+            # Seed with the scenario's opening line as the assistant's first turn
+            opening = {"role": "assistant", "content": scenario["opening_line"]}
+            history.append(opening)
+            appended.append(opening)
 
-    history.append({"role": "user", "content": message})
+        user_msg = {"role": "user", "content": message}
+        history.append(user_msg)
+        appended.append(user_msg)
 
-    system_prompt = build_system_prompt(scenario)
-    reply = call_llm(system_prompt, history, client=client)
+        system_prompt = build_system_prompt(scenario)
+        reply = call_llm(system_prompt, history, client=client)
 
-    history.append({"role": "assistant", "content": reply})
-    return reply
+        assistant_msg = {"role": "assistant", "content": reply}
+        history.append(assistant_msg)
+        appended.append(assistant_msg)
+
+        return reply, appended
+    except Exception:
+        # Self-cleaning: if call_llm raises (e.g. a test or a future
+        # caller injects a failure directly into it, bypassing
+        # llm_client's own exception handling, which normally never
+        # raises), this call must not leave an orphan user message with
+        # no matching reply sitting in shared history - a concurrent
+        # sibling call for the same learner+scenario could otherwise see
+        # it as legitimate prior context. The caller (main.py) can no
+        # longer rely on `appended` for cleanup here since we never
+        # returned it, so we clean up after ourselves before re-raising.
+        remove_turn_from_history(learner_id, scenario_id, appended)
+        raise
 
 
 def get_history(learner_id: str, scenario_id: str) -> list[dict]:
@@ -70,16 +98,15 @@ def reset_all_history_for_learner(learner_id: str) -> None:
         del HISTORY[key]
 
 
-def history_length(learner_id: str, scenario_id: str) -> int:
-    return len(HISTORY.get((learner_id, scenario_id), []))
-
-
-def truncate_history(learner_id: str, scenario_id: str, keep_length: int) -> None:
-    """Rolls back history to what it was before a turn that ultimately
-    failed downstream (e.g. a DB commit error after the LLM reply came
-    back) — otherwise the in-memory conversation would diverge from the
-    persisted state, and the LLM would see a turn that officially never
-    happened."""
+def remove_turn_from_history(learner_id: str, scenario_id: str, messages: list[dict]) -> None:
+    """Rolls back exactly the message objects a failed turn appended,
+    identified by object identity (not value equality — two different
+    turns can easily share identical content, e.g. two learners both
+    typing "hola", and value-based removal could delete the wrong one).
+    Safe under concurrent turns on the same (learner, scenario): a
+    sibling's messages are different objects and are left untouched."""
     key = (learner_id, scenario_id)
-    if key in HISTORY:
-        HISTORY[key] = HISTORY[key][:keep_length]
+    if key not in HISTORY:
+        return
+    ids_to_remove = {id(m) for m in messages}
+    HISTORY[key] = [m for m in HISTORY[key] if id(m) not in ids_to_remove]

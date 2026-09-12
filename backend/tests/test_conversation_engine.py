@@ -83,9 +83,10 @@ def test_build_system_prompt_differs_by_purpose_register():
 
 def test_handle_turn_returns_reply_and_calls_llm_with_system_prompt():
     fake_client = FakeOpenRouterClient(canned_reply="¿Para aquí o para llevar?")
-    reply = handle_turn("learner_a", TRIP_SCENARIO, "Quiero un café.", turn_number=1, client=fake_client)
+    reply, appended = handle_turn("learner_a", TRIP_SCENARIO, "Quiero un café.", turn_number=1, client=fake_client)
 
     assert reply == "¿Para aquí o para llevar?"
+    assert len(appended) == 3  # opening line (first turn) + user msg + assistant reply
     assert len(fake_client.calls) == 1
     system_message = fake_client.calls[0]["messages"][0]
     assert system_message["role"] == "system"

@@ -118,16 +118,30 @@ def _model_chain() -> list[str]:
 
 def _usable_reply(response) -> Optional[str]:
     """Validates a provider response actually has something worth
-    returning. A malformed response (empty choices, null/empty/
-    non-string content) must be treated as a failure and fall through
-    to the next model/retry, not returned as-is or allowed to crash
-    with an IndexError/AttributeError."""
-    if not response.choices:
+    returning. A malformed response (empty choices, a null entry in
+    choices, a missing/null message, or null/empty/non-string content)
+    must be treated as a failure and fall through to the next
+    model/retry, not returned as-is or allowed to crash with an
+    IndexError/AttributeError. Wrapped in a broad try/except because a
+    genuinely malformed provider payload can fail in ways this function
+    doesn't specifically anticipate (e.g. an SDK-level parsing quirk) -
+    any of those should degrade to "try the next model," never crash
+    the request."""
+    try:
+        if not response.choices:
+            return None
+        choice = response.choices[0]
+        if choice is None:
+            return None
+        message = getattr(choice, "message", None)
+        if message is None:
+            return None
+        content = getattr(message, "content", None)
+        if not isinstance(content, str) or not content.strip():
+            return None
+        return content
+    except Exception:
         return None
-    content = response.choices[0].message.content
-    if not isinstance(content, str) or not content.strip():
-        return None
-    return content
 
 
 def _try_model_chain(client, chat_messages: list[dict]) -> tuple[Optional[str], Optional[Exception]]:
@@ -176,6 +190,14 @@ def _try_model_chain(client, chat_messages: list[dict]) -> tuple[Optional[str], 
                 # this key itself is bad/exhausted - stop trying models under
                 # it, let the caller move to the next key
                 return None, e
+            except Exception as e:
+                # Anything else - e.g. the SDK itself failing to parse a
+                # malformed HTTP payload before we ever reach
+                # _usable_reply. Same policy as unusable content: this
+                # model attempt failed, move to the next one rather than
+                # letting an unanticipated shape crash the whole request.
+                last_error = e
+                break
     return None, last_error
 
 

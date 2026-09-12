@@ -38,7 +38,7 @@ from app.models import (
     MAX_ID_LENGTH,
 )
 from app.adaptive_engine import build_scenario
-from app.conversation_engine import handle_turn, reset_all_history_for_learner, history_length, truncate_history
+from app.conversation_engine import handle_turn, reset_all_history_for_learner, remove_turn_from_history
 from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
 from app.personalization_engine import (
@@ -187,12 +187,18 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         raise HTTPException(status_code=404, detail="scenario_id not found — call /scenario first")
     scenario = _scenario_model_to_dict(scenario_row)
 
+    # Captured so that if /profile resets this learner while this request
+    # is still in flight (e.g. a slow LLM call), we can detect it below and
+    # discard this turn's effect rather than applying a stale update to the
+    # learner's brand-new profile.
+    initial_purpose = learner.purpose
+
     # The LLM call and repair detection don't depend on the learner's
     # current scores, so they run once - only the score/counter update
     # below needs to be retried under contention.
-    history_len_before = history_length(req.learner_id, req.scenario_id)
+    appended_messages: list[dict] = []
     try:
-        reply = handle_turn(
+        reply, appended_messages = handle_turn(
             learner_id=req.learner_id,
             scenario=scenario,
             message=req.message,
@@ -242,6 +248,23 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         # recomputed fresh each attempt too, since a retry means the row
         # changed since our last attempt in this same request.
         for attempt in range(CONVERSATION_UPDATE_MAX_RETRIES):
+            # If /profile reset this learner while we were mid-flight (e.g.
+            # a slow LLM call), their purpose has changed underneath us.
+            # Applying our stale turn's counters to the fresh profile would
+            # be wrong - discard this turn's effect and just return the
+            # reply, rather than retrying onto a profile this request never
+            # actually ran against.
+            fresh_check = db.get(LearnerModel, req.learner_id)
+            if fresh_check is not None:
+                db.refresh(fresh_check)
+            if fresh_check is None or fresh_check.purpose != initial_purpose:
+                remove_turn_from_history(req.learner_id, req.scenario_id, appended_messages)
+                return ConversationResponse(
+                    reply=reply,
+                    repair_triggered=repair_result is not None,
+                    repair=RepairDetail(**repair_result) if repair_result else None,
+                )
+
             score_updates = {
                 "total_turns": LearnerModel.total_turns + 1,
                 "version_id": LearnerModel.version_id + 1,
@@ -284,7 +307,11 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         # without a commit), but the in-memory conversation history
         # mutated by handle_turn() would otherwise survive a failure
         # here and diverge from the persisted state - undo it too.
-        truncate_history(req.learner_id, req.scenario_id, history_len_before)
+        # Removed by identity (not by truncating to a saved length): a
+        # concurrent sibling call for the same learner+scenario may have
+        # appended its own, already-successful turn in between, and
+        # length-based truncation would silently delete that too.
+        remove_turn_from_history(req.learner_id, req.scenario_id, appended_messages)
         raise
 
     return ConversationResponse(
