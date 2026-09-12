@@ -143,15 +143,36 @@ Send a learner message, get the AI partner's reply + repair flag if triggered.
 
 ---
 
-## Error format (all endpoints)
+## Error format
 
+The shape differs by status code — check `error`/`detail` presence, don't assume one uniform format across all of them:
+
+**401 (missing/invalid API key) and 404 (not found)**
+```json
+{ "detail": "human-readable message" }
+```
+
+**422 (validation failed — empty/too-long field, wrong type, missing required field)**
 ```json
 {
-  "error": "string, human-readable",
-  "code": "string, e.g. LEARNER_NOT_FOUND"
+  "detail": [
+    { "type": "string_too_short", "loc": ["body", "learner_id"], "msg": "...", "input": "", "ctx": {...} }
+  ]
 }
 ```
-HTTP status: 401 (missing/invalid API key) / 404 (not found) / 422 (request failed validation — e.g. empty/too-long field, missing required field) / 429 (rate limit exceeded) / 500 (server error, unhandled).
+`detail` is a list — a request can fail multiple field validations at once. For a simple UI error message, `detail[0].msg` is usually enough; don't try to show the raw `loc`/`ctx` to the learner.
+
+**429 (rate limit exceeded)**
+```json
+{ "error": "Rate limit exceeded: 20 per 1 minute" }
+```
+
+**500 (unhandled server error)**
+```json
+{ "error": "An unexpected error occurred.", "code": "INTERNAL_ERROR" }
+```
+
+Practical takeaway for Android: check the HTTP status code first, then read `detail` for 401/404/422 or `error` for 429/500 — don't parse assuming both fields always exist.
 
 ## Authentication
 
@@ -180,3 +201,25 @@ Every endpoint except `GET /` requires an `X-API-Key` header matching the shared
 Note: free-tier Render spins down after 15 min of inactivity — the first request after idle takes ~30-50s to wake up. Not a bug, expected on the free plan.
 
 Android should read base URL from a build config value, not hardcode it, so switching local→deployed is a one-line change.
+
+---
+
+## Quick reference for Android integration
+
+**Every request** (except `GET /`) needs this header:
+```
+X-API-Key: <shared key, sent to you separately — never commit it into the repo>
+```
+
+**Typical session flow** (call in this order):
+1. `POST /profile` once per learner (or when they change purpose/level/interests)
+2. `GET /scenario?learner_id=...` to get the next situation
+3. `POST /conversation` for each learner message in that scenario (loop this)
+4. `GET /readiness?learner_id=...` whenever you want to show their current score (dashboard, end of session, etc.)
+
+**Things you will genuinely see in testing — not bugs:**
+- A `/conversation` reply starting with `"[offline] ..."` — means the backend's LLM provider (OpenRouter, free tier) is temporarily rate-limited or misconfigured server-side. Render it as the AI's message like any other reply; don't treat it as an error state in the UI. If you see it constantly (not occasionally), tell Ankit.
+- The **first** request after the backend has been idle can take 30-50 seconds (Render free tier cold start). Show a loading state, don't assume it's hung.
+- `repair` in the `/conversation` response is `null` most of the time — that's correct. It only populates when `repair_triggered` is `true`.
+
+**Test with your own `learner_id` values** (e.g. `"sakshi_test_1"`), not `"u1"` — that one has accumulated test history from backend development and its readiness numbers won't mean anything clean for you to demo against.
