@@ -1,9 +1,12 @@
 # NOVARA API Contract
 
-Frozen for Review 3 scope: **Spanish, Trip + Casual purposes only.**
-Owner: Ankit (implements for real in `/backend`). Sakshi mocks these shapes in Android until backend is live, then swaps to real calls (Task 7, both sides).
+**FROZEN as of 2026-09-12.** This is the real, verified-against-production shape of all 5 endpoints — not an aspirational draft. Sakshi should build Android against exactly what's documented here, no assumptions beyond it.
 
-If a field needs to change: whoever needs it updates this file + pings the other in the group chat before changing code. Never change a shape silently.
+Scope: Spanish, Trip + Casual purposes only. Backend is fully implemented, deployed, tested (97 tests), and hardened (auth, rate limiting, input validation) — it will not be casually changed from here on.
+
+**If a field genuinely must change after this point**: Ankit updates this file, bumps the note below with the date and what changed, and tells Sakshi directly before touching the deployed API — never a silent shape change. A breaking change to something Sakshi has already built against is the one thing that should stop her mid-task, so it needs an explicit heads-up, not a git commit she happens to notice.
+
+*No changes since freeze.*
 
 ---
 
