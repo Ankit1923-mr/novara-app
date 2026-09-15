@@ -6,6 +6,7 @@ import { getItem, setItem } from '../utils/storage'
 import { getMockConversationReply } from '../utils/mockData'
 import { getEnglishTranslationSync, translateSpanishToEnglish, isLikelyEnglish, getSpanishSuggestionFromEnglish } from '../utils/translator'
 import ThreeBackground from '../components/ThreeBackground'
+import SceneHUD from '../components/SceneHUD'
 import './Chat.css'
 
 export default function Chat() {
@@ -318,6 +319,15 @@ export default function Chat() {
           </button>
         </div>
       </header>
+
+      {/* Interactive Visual Scene Anchor & POV Video HUD */}
+      <SceneHUD
+        scenario={scenario}
+        onUsePhrase={(phrase) => {
+          setInput(phrase)
+          inputRef.current?.focus()
+        }}
+      />
 
       {/* Messages Scroll Area */}
       <div className="chat-messages">
