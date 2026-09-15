@@ -65,32 +65,63 @@ def _score_situation(tag: str, purpose: str, interests: list[str],
     return interest_overlap + weak_area_overlap + novelty_bonus
 
 
-def choose_situation(purpose: str, interests: Optional[list[str]] = None,
-                      weak_areas: Optional[list[str]] = None,
-                      recently_seen: Optional[list[str]] = None) -> str:
-    """Return the highest-scoring situation tag for this learner."""
+def score_all_situations(purpose: str, interests: Optional[list[str]] = None,
+                          weak_areas: Optional[list[str]] = None,
+                          recently_seen: Optional[list[str]] = None) -> list[dict]:
+    """Score every candidate situation tag for this learner — exposed so the
+    frontend can show *why* a scenario was chosen, not just the result."""
     interests = interests or []
     weak_areas = weak_areas or []
     recently_seen = recently_seen or []
 
     situations = list_situations(purpose)
+    breakdown = []
+    for tag in situations:
+        nodes = get_subgraph(purpose, situation_tag=tag)
+        all_tags: set[str] = set()
+        for n in nodes:
+            all_tags.update(n["situation_tags"])
+
+        interest_overlap = sorted(set(interests) & all_tags)
+        weak_area_overlap = sorted(set(weak_areas) & all_tags)
+        novel = tag not in recently_seen
+
+        breakdown.append({
+            "situation_tag": tag,
+            "interest_overlap": interest_overlap,
+            "weak_area_overlap": weak_area_overlap,
+            "novelty_bonus": 1 if novel else 0,
+            "score": len(interest_overlap) + len(weak_area_overlap) + (1 if novel else 0),
+        })
+
+    breakdown.sort(key=lambda b: b["score"], reverse=True)
+    return breakdown
+
+
+def choose_situation(purpose: str, interests: Optional[list[str]] = None,
+                      weak_areas: Optional[list[str]] = None,
+                      recently_seen: Optional[list[str]] = None) -> str:
+    """Return the highest-scoring situation tag for this learner."""
+    situations = list_situations(purpose)
     if not situations:
         raise ValueError(f"no situations available for purpose={purpose!r}")
 
-    best_tag = situations[0]
-    best_score = -1
+    breakdown = score_all_situations(purpose, interests, weak_areas, recently_seen)
+    # breakdown is sorted by score desc but ties should break by first
+    # occurrence in list_situations, same as the original loop-based version.
+    best_score = breakdown[0]["score"]
+    top_tags = {b["situation_tag"] for b in breakdown if b["score"] == best_score}
     for tag in situations:
-        score = _score_situation(tag, purpose, interests, weak_areas, recently_seen)
-        if score > best_score:
-            best_score = score
-            best_tag = tag
-    return best_tag
+        if tag in top_tags:
+            return tag
+    return situations[0]
 
 
 def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]] = None,
                     weak_areas: Optional[list[str]] = None,
                     recently_seen: Optional[list[str]] = None) -> dict:
     """Full scenario object matching the /scenario contract shape."""
+    selection_scores = score_all_situations(purpose, interests, weak_areas, recently_seen)
     tag = choose_situation(purpose, interests, weak_areas, recently_seen)
     nodes: list[Node] = get_subgraph(purpose, situation_tag=tag)
     meta = SCENARIO_META.get(tag, {"title": tag.title(), "setting": "Spain"})
@@ -107,4 +138,5 @@ def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]]
         "setting": meta["setting"],
         "situation_tags": sorted({t for n in nodes for t in n["situation_tags"]}),
         "opening_line": opening_line,
+        "selection_scores": selection_scores,
     }

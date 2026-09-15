@@ -32,6 +32,14 @@ class ProfileResponse(BaseModel):
     confidence_score: float
 
 
+class SituationScore(BaseModel):
+    situation_tag: str
+    interest_overlap: list[str]
+    weak_area_overlap: list[str]
+    novelty_bonus: int
+    score: int
+
+
 class ScenarioResponse(BaseModel):
     scenario_id: str
     purpose: Purpose
@@ -39,6 +47,10 @@ class ScenarioResponse(BaseModel):
     setting: str
     situation_tags: list[str]
     opening_line: str
+    # Additive field (not part of the frozen 5-endpoint contract fields) —
+    # exposes the Adaptive Engine's scoring so the frontend can show *why*
+    # this scenario was picked over the alternatives.
+    selection_scores: list[SituationScore] = []
 
 
 class ConversationRequest(BaseModel):
