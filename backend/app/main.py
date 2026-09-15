@@ -15,6 +15,7 @@ See docs/api-contract.md for the frozen request/response shapes.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone, date, timedelta
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -35,6 +36,13 @@ from app.models import (
     RepairRequest,
     ReadinessResponse,
     MAX_ID_LENGTH,
+    SignupRequest,
+    LoginRequest,
+    AuthResponse,
+    TopicSummary,
+    TopicDetail,
+    QuizSubmission,
+    QuizResult,
 )
 from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn, reset_all_history_for_learner, remove_turn_from_history
@@ -45,8 +53,10 @@ from app.personalization_engine import (
 )
 from app.readiness_engine import compute_readiness
 from app.db import get_db, init_db
-from app.db_models import LearnerModel, ScenarioModel
+from app.db_models import LearnerModel, ScenarioModel, UserModel
 from app.auth import verify_api_key
+from app.auth_service import hash_password, verify_password, create_session_token, decode_session_token
+from app import lesson_content
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -94,6 +104,39 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _bump_streak(learner: LearnerModel) -> None:
+    """Called on any real learning activity (quiz submit, conversation
+    turn). Simple day-based streak: consecutive calendar days (UTC)
+    extend it, a gap resets it, same day is a no-op."""
+    today = datetime.now(timezone.utc).date()
+    if learner.last_active_date is None:
+        learner.streak_days = 1
+    else:
+        last = date.fromisoformat(learner.last_active_date)
+        if last == today:
+            return
+        elif last == today - timedelta(days=1):
+            learner.streak_days = (learner.streak_days or 0) + 1
+        else:
+            learner.streak_days = 1
+    learner.last_active_date = today.isoformat()
+
+
+def _get_current_user_email(request: Request) -> str:
+    """Reads and validates the Authorization: Bearer <jwt> header for the
+    web-app's per-user session. Separate from verify_api_key (the
+    app-level gate) - a web-app request needs both a valid API key AND
+    a valid session token."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    token = auth_header[len("Bearer "):]
+    email = decode_session_token(token)
+    if email is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token")
+    return email
+
+
 def _scenario_model_to_dict(s: ScenarioModel) -> dict:
     return {
         "scenario_id": s.scenario_id,
@@ -108,6 +151,41 @@ def _scenario_model_to_dict(s: ScenarioModel) -> dict:
 @app.get("/")
 def health_check():
     return {"status": "ok", "service": "novara-api"}
+
+
+@app.post("/auth/signup", response_model=AuthResponse, dependencies=[Depends(verify_api_key)])
+def signup(req: SignupRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    existing = db.get(UserModel, email)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    user = UserModel(
+        email=email,
+        password_hash=hash_password(req.password),
+        email_verified=False,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(user)
+    db.commit()
+
+    token = create_session_token(email)
+    has_profile = db.get(LearnerModel, email) is not None
+    return AuthResponse(token=token, email=email, learner_id=email, has_profile=has_profile)
+
+
+@app.post("/auth/login", response_model=AuthResponse, dependencies=[Depends(verify_api_key)])
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    email = req.email.strip().lower()
+    user = db.get(UserModel, email)
+    if user is None or not verify_password(req.password, user.password_hash):
+        # deliberately the same error for "no such user" and "wrong password" -
+        # distinguishing them lets an attacker enumerate registered emails
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    token = create_session_token(email)
+    has_profile = db.get(LearnerModel, email) is not None
+    return AuthResponse(token=token, email=email, learner_id=email, has_profile=has_profile)
 
 
 @app.post("/profile", response_model=ProfileResponse, dependencies=[Depends(verify_api_key)])
@@ -295,6 +373,16 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                     cast(EMA_ALPHA * pace_signal + (1 - EMA_ALPHA) * current.pace_score, Numeric), 4
                 )
 
+            today_iso = datetime.now(timezone.utc).date().isoformat()
+            if current.last_active_date == today_iso:
+                pass  # already counted today, no change
+            elif current.last_active_date == (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat():
+                values["streak_days"] = (current.streak_days or 0) + 1
+                values["last_active_date"] = today_iso
+            else:
+                values["streak_days"] = 1
+                values["last_active_date"] = today_iso
+
             result = db.execute(
                 sa_update(LearnerModel)
                 .where(
@@ -353,3 +441,69 @@ def get_readiness(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH
     )
 
     return ReadinessResponse(learner_id=learner_id, **result)
+
+
+@app.get("/topics", response_model=list[TopicSummary], dependencies=[Depends(verify_api_key)])
+def get_topics(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+    learner = db.get(LearnerModel, learner_id)
+    completed = set(learner.topics_completed) if learner else set()
+    return [
+        TopicSummary(topic_id=t["topic_id"], title=t["title"], order_index=t["order_index"],
+                      completed=t["topic_id"] in completed)
+        for t in lesson_content.list_topics()
+    ]
+
+
+@app.get("/topics/{topic_id}", response_model=TopicDetail, dependencies=[Depends(verify_api_key)])
+def get_topic_detail(topic_id: str):
+    topic = lesson_content.get_topic(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="topic not found")
+    return TopicDetail(topic_id=topic["topic_id"], title=topic["title"],
+                        vocabulary=topic["vocabulary"],
+                        quiz=[{"question": q["question"], "options": q["options"], "correct_index": q["correct_index"]}
+                              for q in topic["quiz"]])
+
+
+@app.post("/topics/{topic_id}/submit", response_model=QuizResult, dependencies=[Depends(verify_api_key)])
+def submit_quiz(topic_id: str, req: QuizSubmission, db: Session = Depends(get_db)):
+    if lesson_content.get_topic(topic_id) is None:
+        raise HTTPException(status_code=404, detail="topic not found")
+
+    learner = db.get(LearnerModel, req.learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+
+    result = lesson_content.grade_quiz(topic_id, req.answers)
+
+    # Track exactly which phrases this learner keeps missing, across every
+    # quiz attempt - this is the "focus on where they're actually making
+    # mistakes" signal the adaptive engine can build on, rather than a
+    # generic difficulty knob.
+    mistake_words = dict(learner.mistake_words)
+    for phrase in result["missed_phrases"]:
+        mistake_words[phrase] = mistake_words.get(phrase, 0) + 1
+    learner.mistake_words = mistake_words
+
+    if result["score"] >= 0.7 and topic_id not in learner.topics_completed:
+        learner.topics_completed = learner.topics_completed + [topic_id]
+
+    _bump_streak(learner)
+    db.commit()
+
+    return QuizResult(**result)
+
+
+@app.post("/profile/pace", dependencies=[Depends(verify_api_key)])
+def set_pace_preference(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH),
+                         pace_preference: float = Query(ge=0.5, le=2.0),
+                         db: Session = Depends(get_db)):
+    """Learner-controlled speed multiplier - distinct from pace_score,
+    which the Personalization Engine infers from response times. This is
+    the direct 'faster / slower' control the UI exposes."""
+    learner = db.get(LearnerModel, learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+    learner.pace_preference = pace_preference
+    db.commit()
+    return {"learner_id": learner_id, "pace_preference": pace_preference}

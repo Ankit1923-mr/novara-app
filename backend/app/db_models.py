@@ -3,7 +3,7 @@ SQLAlchemy ORM models — the persistent shape of what used to live in
 main.py's in-memory LEARNERS/SCENARIOS dicts.
 """
 
-from sqlalchemy import Column, String, Float, Integer, JSON
+from sqlalchemy import Column, String, Float, Integer, JSON, DateTime, Boolean
 from app.db import Base
 
 
@@ -36,7 +36,37 @@ class LearnerModel(Base):
     total_turns = Column(Integer, default=0)
     repair_counts = Column(JSON, default=dict)
 
+    # --- Web app additions: streak/pace/curriculum tracking ---
+    # User-adjustable speed multiplier (learner can raise/lower it directly);
+    # distinct from pace_score, which the Personalization Engine computes
+    # from observed response times. This is what the "faster / slower"
+    # control in the UI writes to.
+    pace_preference = Column(Float, default=1.0)
+    streak_days = Column(Integer, default=0)
+    last_active_date = Column(String, nullable=True)  # ISO date "YYYY-MM-DD"
+    topics_completed = Column(JSON, default=list)      # list of topic_id
+    mistake_words = Column(JSON, default=dict)          # {"vocab phrase": wrong_count}
+    cefr_level = Column(String, nullable=True)          # e.g. "A1" - set once thresholds are met
+
     __mapper_args__ = {"version_id_col": version_id}
+
+
+class UserModel(Base):
+    """A web-app account. Deliberately separate from LearnerModel: signup
+    creates a UserModel row only. The matching LearnerModel row (purpose,
+    interests, etc.) is created afterward by the onboarding questionnaire
+    calling the existing, contract-frozen POST /profile with
+    learner_id = the user's email - no change needed to that contract or
+    to Sakshi's Android integration."""
+    __tablename__ = "users"
+
+    email = Column(String, primary_key=True)
+    password_hash = Column(String, nullable=False)
+    # Structurally present, always False for now - real email delivery
+    # (SMTP/transactional email service) is not wired up yet. Documented
+    # honestly as a gap, not silently pretended to work.
+    email_verified = Column(Boolean, default=False)
+    created_at = Column(DateTime, nullable=True)
 
 
 class ScenarioModel(Base):

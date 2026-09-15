@@ -72,3 +72,65 @@ class ReadinessResponse(BaseModel):
     breakdown: dict[str, float]
     purpose: Purpose
     weights_used: dict[str, float]
+
+
+# --- Web-app accounts ---
+MIN_PASSWORD_LENGTH = 8
+MAX_EMAIL_LENGTH = 254  # RFC 5321 limit
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=MAX_EMAIL_LENGTH)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=MAX_EMAIL_LENGTH)
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    email: str
+    learner_id: str  # equals email - the web app uses this to call /profile, /scenario, etc.
+    has_profile: bool  # false until the onboarding questionnaire has called POST /profile once
+
+
+# --- Lessons and quizzes ---
+class VocabItem(BaseModel):
+    phrase: str
+    meaning: str
+    cultural_note: str
+
+
+class QuizQuestion(BaseModel):
+    question: str
+    options: list[str]
+    correct_index: int
+
+
+class TopicSummary(BaseModel):
+    topic_id: str
+    title: str
+    order_index: int
+    completed: bool
+
+
+class TopicDetail(BaseModel):
+    topic_id: str
+    title: str
+    vocabulary: list[VocabItem]
+    quiz: list[QuizQuestion]  # correct_index included - fine for an MVP with no anti-cheat requirement
+
+
+class QuizSubmission(BaseModel):
+    learner_id: str = Field(min_length=1, max_length=MAX_ID_LENGTH)
+    answers: list[int] = Field(min_length=1, max_length=50)
+
+
+class QuizResult(BaseModel):
+    topic_id: str
+    score: float  # 0-1
+    correct_count: int
+    total: int
+    missed_phrases: list[str]  # vocabulary tied to questions the learner got wrong, feeds mistake_words
