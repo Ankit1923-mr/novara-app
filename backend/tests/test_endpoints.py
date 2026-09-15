@@ -42,6 +42,16 @@ def test_wrong_api_key_is_rejected():
     assert r.status_code == 401
 
 
+def test_demo_api_key_is_also_accepted(monkeypatch):
+    monkeypatch.setenv("NOVARA_API_KEY_DEMO", "demo-key-for-this-test")
+    demo_client = TestClient(app, headers={"X-API-Key": "demo-key-for-this-test"})
+    r = demo_client.post("/profile", json={
+        "learner_id": "demo_key_test_learner", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    assert r.status_code == 200
+
+
 def test_profile_rejects_empty_learner_id():
     r = client.post("/profile", json={
         "learner_id": "", "level": "A2", "region": "Madrid",
