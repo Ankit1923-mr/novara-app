@@ -51,20 +51,6 @@ SCENARIO_META: dict[str, dict] = {
 }
 
 
-def _score_situation(tag: str, purpose: str, interests: list[str],
-                      weak_areas: list[str], recently_seen: list[str]) -> int:
-    nodes = get_subgraph(purpose, situation_tag=tag)
-    all_tags: set[str] = set()
-    for n in nodes:
-        all_tags.update(n["situation_tags"])
-
-    interest_overlap = len(set(interests) & all_tags)
-    weak_area_overlap = len(set(weak_areas) & all_tags)
-    novelty_bonus = 0 if tag in recently_seen else 1
-
-    return interest_overlap + weak_area_overlap + novelty_bonus
-
-
 def score_all_situations(purpose: str, interests: Optional[list[str]] = None,
                           weak_areas: Optional[list[str]] = None,
                           recently_seen: Optional[list[str]] = None) -> list[dict]:
