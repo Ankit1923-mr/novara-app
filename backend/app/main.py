@@ -43,6 +43,7 @@ from app.models import (
     TopicDetail,
     QuizSubmission,
     QuizResult,
+    LearnerState,
 )
 from app.adaptive_engine import build_scenario
 from app.conversation_engine import handle_turn, reset_all_history_for_learner, remove_turn_from_history
@@ -196,6 +197,8 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
         db.add(learner)
 
     learner.purpose = req.purpose
+    learner.level = req.level
+    learner.region = req.region
     learner.interests = req.interests
     learner.weak_areas = req.weak_areas
     learner.pace_score = 0.5
@@ -441,6 +444,30 @@ def get_readiness(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH
     )
 
     return ReadinessResponse(learner_id=learner_id, **result)
+
+
+@app.get("/me", response_model=LearnerState, dependencies=[Depends(verify_api_key)])
+def get_learner_state(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+    """Full learner snapshot for the web app's dashboard - everything
+    /profile, /readiness and /topics each show a slice of, in one call."""
+    learner = db.get(LearnerModel, learner_id)
+    if learner is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+
+    return LearnerState(
+        learner_id=learner.learner_id,
+        purpose=learner.purpose,
+        region=learner.region or "",
+        interests=learner.interests,
+        weak_areas=learner.weak_areas,
+        pace_score=learner.pace_score,
+        pace_preference=learner.pace_preference,
+        confidence_score=learner.confidence_score,
+        streak_days=learner.streak_days,
+        topics_completed=learner.topics_completed,
+        mistake_words=learner.mistake_words,
+        total_turns=learner.total_turns,
+    )
 
 
 @app.get("/topics", response_model=list[TopicSummary], dependencies=[Depends(verify_api_key)])

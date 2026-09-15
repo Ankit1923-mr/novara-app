@@ -74,6 +74,25 @@ class ReadinessResponse(BaseModel):
     weights_used: dict[str, float]
 
 
+class LearnerState(BaseModel):
+    """Full learner snapshot for the web app's dashboard — fields not
+    covered by /profile's creation-time response or /readiness's
+    scoring-only response (streak, pace preference, topics done,
+    tracked mistakes)."""
+    learner_id: str
+    purpose: Purpose
+    region: str
+    interests: list[str]
+    weak_areas: list[str]
+    pace_score: float
+    pace_preference: float
+    confidence_score: float
+    streak_days: int
+    topics_completed: list[str]
+    mistake_words: dict[str, int]
+    total_turns: int
+
+
 # --- Web-app accounts ---
 MIN_PASSWORD_LENGTH = 8
 MAX_EMAIL_LENGTH = 254  # RFC 5321 limit

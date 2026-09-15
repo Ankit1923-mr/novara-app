@@ -87,6 +87,28 @@ def test_has_profile_reflects_whether_profile_exists():
     assert r.json()["has_profile"] is True
 
 
+# --- learner state ---
+
+def test_me_endpoint_returns_full_learner_snapshot():
+    client.post("/profile", json={
+        "learner_id": "me_test_learner", "level": "A2", "region": "Barcelona",
+        "purpose": "casual", "interests": ["music"], "weak_areas": ["grammar"]
+    })
+    r = client.get("/me", params={"learner_id": "me_test_learner"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["region"] == "Barcelona"
+    assert body["purpose"] == "casual"
+    assert body["interests"] == ["music"]
+    assert body["streak_days"] == 0
+    assert body["pace_preference"] == 1.0
+
+
+def test_me_endpoint_requires_existing_learner():
+    r = client.get("/me", params={"learner_id": "never_created_for_me"})
+    assert r.status_code == 404
+
+
 # --- topics / quiz ---
 
 def test_list_topics_returns_at_least_three():

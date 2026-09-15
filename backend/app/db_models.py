@@ -28,6 +28,11 @@ class LearnerModel(Base):
     # changes, so it's what /conversation's stale-write guard checks.
     profile_generation = Column(Integer, nullable=False, default=0)
     purpose = Column(String, nullable=False)
+    # level and region were accepted by ProfileRequest from Day 0 but never
+    # actually persisted anywhere - a real gap an external test report
+    # flagged. Fixed here rather than left silently dropped.
+    level = Column(String, nullable=True)
+    region = Column(String, nullable=True)
     interests = Column(JSON, default=list)
     weak_areas = Column(JSON, default=list)
     pace_score = Column(Float, default=0.5)
