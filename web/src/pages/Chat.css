@@ -556,3 +556,128 @@
   cursor: not-allowed;
   box-shadow: none;
 }
+
+/* ─── English Translation Subtitle Box ──────────────────── */
+.chat-translation-box {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(2, 6, 23, 0.65);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+.chat-translation-box:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(2, 6, 23, 0.8);
+}
+
+.translation-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #38bdf8;
+  margin-bottom: 3px;
+}
+
+.translation-text {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+  font-style: italic;
+}
+
+/* ─── User English Source Note ──────────────────────────── */
+.user-english-source {
+  margin-top: 8px;
+  padding: 5px 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #d1fae5;
+  flex-wrap: wrap;
+}
+
+.user-english-tag {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.user-english-text {
+  font-style: italic;
+  opacity: 0.95;
+}
+
+/* ─── English Detection Helper Chip above Input ─────────── */
+.chat-english-helper {
+  position: relative;
+  z-index: 9;
+  padding: 8px 20px 0;
+  display: flex;
+  justify-content: center;
+}
+
+.chat-english-helper-content {
+  max-width: 680px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4), 0 0 20px rgba(245, 158, 11, 0.15);
+  backdrop-filter: blur(12px);
+}
+
+.helper-label {
+  font-size: 0.78rem;
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.helper-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  border-radius: var(--radius-full);
+  color: #34d399;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.helper-chip-btn:hover {
+  background: rgba(16, 185, 129, 0.35);
+  border-color: #34d399;
+  transform: translateY(-1px);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
+}
+
+.helper-suggestion-text {
+  font-style: italic;
+}
+
+.helper-chip-action {
+  font-size: 0.72rem;
+  background: rgba(16, 185, 129, 0.25);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+

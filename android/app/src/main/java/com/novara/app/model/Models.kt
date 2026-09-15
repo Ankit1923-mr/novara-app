@@ -75,6 +75,8 @@ data class ChatMessage(
     val id: String,
     val role: MessageRole,
     val text: String,
+    val translation: String? = null,
+    val originalEnglish: String? = null,
     val errorType: String? = null,
     val strategy: String? = null,
     val accentScore: Int? = null,

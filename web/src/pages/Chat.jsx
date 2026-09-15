@@ -4,6 +4,7 @@ import { sendMessage } from '../api'
 import { speakSpanish, stopSpeaking, createSpeechRecognizer, analyzeAccentAndPhonetics } from '../utils/audio'
 import { getItem, setItem } from '../utils/storage'
 import { getMockConversationReply } from '../utils/mockData'
+import { getEnglishTranslationSync, translateSpanishToEnglish, isLikelyEnglish, getSpanishSuggestionFromEnglish } from '../utils/translator'
 import ThreeBackground from '../components/ThreeBackground'
 import './Chat.css'
 
@@ -18,6 +19,7 @@ export default function Chat() {
   const scenarioData = getItem('scenario')
   const nativeLanguage = getItem('native_language', 'English')
   const [useMock, setUseMock] = useState(() => getItem('use_mock') === 'true')
+  const [showEnglish, setShowEnglish] = useState(true)
 
   const [scenario] = useState(() => {
     if (!scenarioData) return null
@@ -32,6 +34,7 @@ export default function Chat() {
         id: 'opening',
         role: 'assistant',
         text: parsed.opening_line,
+        translation: getEnglishTranslationSync(parsed.opening_line),
         timestamp: new Date(),
       }]
     } catch { return [] }
@@ -124,19 +127,21 @@ export default function Chat() {
 
   const handleSend = async () => {
     const text = input.trim()
-    if (!text || sending || !scenario) return
+    const userWroteEnglish = isLikelyEnglish(text)
+    const spanishText = userWroteEnglish ? (getSpanishSuggestionFromEnglish(text) || text) : text
 
     // Calculate response time
     const responseTimeMs = turnStartRef.current ? Date.now() - turnStartRef.current : undefined
 
     // Analyze learner accent & pronunciation
-    const phoneticAnalysis = analyzeAccentAndPhonetics(text, nativeLanguage)
+    const phoneticAnalysis = analyzeAccentAndPhonetics(spanishText, nativeLanguage)
 
-    // Add user message with pronunciation & accent metrics
+    // Add user message with pronunciation & accent metrics + English source note if applicable
     const userMsg = {
       id: 'u_' + Date.now(),
       role: 'user',
-      text,
+      text: spanishText,
+      originalEnglish: userWroteEnglish ? text : null,
       timestamp: new Date(),
       phonetics: phoneticAnalysis,
     }
@@ -153,12 +158,12 @@ export default function Chat() {
     if (useMock) {
       // Simulate natural thinking delay
       await new Promise(r => setTimeout(r, 600))
-      replyData = getMockConversationReply(newTurn, text)
+      replyData = getMockConversationReply(newTurn, spanishText)
     } else {
       const { ok, data } = await sendMessage({
         learnerId,
         scenarioId: scenario.scenario_id,
-        message: text,
+        message: spanishText,
         turnNumber: newTurn,
         responseTimeMs,
       })
@@ -168,7 +173,7 @@ export default function Chat() {
       } else {
         // Fallback to mock reply so test continues seamlessly
         console.warn('Backend unavailable, using mock response:', data?.detail || data?.error)
-        replyData = getMockConversationReply(newTurn, text)
+        replyData = getMockConversationReply(newTurn, spanishText)
       }
     }
 
@@ -185,28 +190,45 @@ export default function Chat() {
       return
     }
 
-    // Add AI reply
+    // Add AI reply with English translation
     const replyId = 'a_' + Date.now()
+    const aiTranslation = getEnglishTranslationSync(replyData.reply)
     setMessages(prev => [...prev, {
       id: replyId,
       role: 'assistant',
       text: replyData.reply,
+      translation: aiTranslation,
       timestamp: new Date(),
     }])
 
     // Auto-speak AI response if desired
     handlePlayAudio(replyId, replyData.reply)
 
-    // Add repair if triggered (Task 5: inline repair bubble)
+    // Asynchronously enhance translation if not exact match
+    translateSpanishToEnglish(replyData.reply).then(asyncTrans => {
+      if (asyncTrans && asyncTrans !== aiTranslation) {
+        setMessages(prev => prev.map(m => m.id === replyId ? { ...m, translation: asyncTrans } : m))
+      }
+    }).catch(() => {})
+
+    // Add repair if triggered with English explanation (Task 5: inline repair bubble)
     if (replyData.repair_triggered && replyData.repair) {
+      const repId = 'r_' + Date.now()
+      const repairTranslation = getEnglishTranslationSync(replyData.repair.repair_text)
       setMessages(prev => [...prev, {
-        id: 'r_' + Date.now(),
+        id: repId,
         role: 'repair',
         text: replyData.repair.repair_text,
+        translation: repairTranslation,
         errorType: replyData.repair.error_type,
         strategy: replyData.repair.strategy,
         timestamp: new Date(),
       }])
+      translateSpanishToEnglish(replyData.repair.repair_text).then(asyncTrans => {
+        if (asyncTrans && asyncTrans !== repairTranslation) {
+          setMessages(prev => prev.map(m => m.id === repId ? { ...m, translation: asyncTrans } : m))
+        }
+      }).catch(() => {})
     }
 
     inputRef.current?.focus()
@@ -240,6 +262,16 @@ export default function Chat() {
         </div>
 
         <div className="chat-header-actions">
+          {/* English Subtitles Toggle */}
+          <button
+            type="button"
+            className={`rate-chip font-mono ${showEnglish ? 'active' : ''}`}
+            onClick={() => setShowEnglish(!showEnglish)}
+            title="Toggle English translation under Spanish responses"
+          >
+            🇬🇧 {showEnglish ? 'ENG SUB: ON' : 'ENG SUB: OFF'}
+          </button>
+
           {/* Mock vs Live Toggle */}
           <button
             type="button"
@@ -353,6 +385,26 @@ export default function Chat() {
                   )}
                 </div>
 
+                {/* English Subtitle Box directly underneath Spanish */}
+                {showEnglish && (msg.role === 'assistant' || msg.role === 'repair') && (
+                  <div className="chat-translation-box animate-in">
+                    <div className="translation-tag font-mono">
+                      <span>🇬🇧 English Meaning:</span>
+                    </div>
+                    <p className="translation-text">
+                      {msg.translation || getEnglishTranslationSync(msg.text)}
+                    </p>
+                  </div>
+                )}
+
+                {/* User original English note if learner typed in English */}
+                {msg.role === 'user' && msg.originalEnglish && (
+                  <div className="user-english-source font-mono animate-in">
+                    <span className="user-english-tag">🇬🇧 You wrote in English:</span>
+                    <span className="user-english-text">"{msg.originalEnglish}"</span>
+                  </div>
+                )}
+
                 {/* Accent & Phonetic Score for User turns */}
                 {msg.role === 'user' && msg.phonetics && (
                   <div className="chat-accent-meta">
@@ -433,6 +485,29 @@ export default function Chat() {
         </div>
       </div>
 
+      {/* English Detection Helper Chip */}
+      {isLikelyEnglish(input) && (
+        <div className="chat-english-helper animate-in">
+          <div className="chat-english-helper-content">
+            <span className="helper-label">💡 English detected. In Spanish you can say:</span>
+            <button
+              type="button"
+              className="helper-chip-btn"
+              onClick={() => {
+                const suggestion = getSpanishSuggestionFromEnglish(input)
+                if (suggestion) setInput(suggestion)
+              }}
+              title="Click to use Spanish suggestion"
+            >
+              <span className="helper-suggestion-text">
+                "{getSpanishSuggestionFromEnglish(input) || input}"
+              </span>
+              <span className="helper-chip-action font-mono">Click to use ➔</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Input Bar */}
       <div className="chat-input-bar">
         <div className="chat-input-inner">
@@ -465,7 +540,7 @@ export default function Chat() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isListening ? 'Hablando… (escuchando)' : 'Escribe o habla en español…'}
+            placeholder={isListening ? 'Hablando… (escuchando)' : 'Escribe en español o inglés… (Type in Spanish or English)'}
             disabled={sending}
             autoFocus
           />

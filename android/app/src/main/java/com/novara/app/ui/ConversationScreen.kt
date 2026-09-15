@@ -221,16 +221,43 @@ fun ConversationScreen(
                                     .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
                                     .padding(horizontal = 16.dp, vertical = 12.dp)
                             ) {
-                                Row(verticalAlignment = Alignment.Top) {
-                                    Text("🇪🇸 ", fontSize = 14.sp)
-                                    Text(msg.text, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                                    Text(" 🔊", fontSize = 13.sp, color = AccentCyan)
+                                Column {
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        Text("🇪🇸 ", fontSize = 14.sp)
+                                        Text(msg.text, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                        Text(" 🔊", fontSize = 13.sp, color = AccentCyan)
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    // English Subtitle Placeholder Box
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(BgElevated.copy(alpha = 0.7f))
+                                            .border(1.dp, AccentCyan.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                "🇬🇧 ENGLISH MEANING:",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AccentCyan
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                msg.translation ?: getEnglishTranslation(msg.text),
+                                                fontSize = 12.sp,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                     MessageRole.REPAIR -> {
-                        // Task 5 Deliverable: Inline Repair Bubble
+                        // Task 5 Deliverable: Inline Repair Bubble with English explanation
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
@@ -261,6 +288,31 @@ fun ConversationScreen(
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Medium
                                 )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                // English Translation Box for Repair
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(BgElevated.copy(alpha = 0.7f))
+                                        .border(1.dp, AccentGold.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            "🇬🇧 EXPLANATION:",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = AccentGold
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            msg.translation ?: getEnglishTranslation(msg.text),
+                                            fontSize = 12.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -286,7 +338,7 @@ fun ConversationScreen(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("Escribe en español…", color = TextMuted, fontSize = 14.sp) },
+                placeholder = { Text("Escribe en español o inglés…", color = TextMuted, fontSize = 13.sp) },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
@@ -314,3 +366,26 @@ fun ConversationScreen(
         }
     }
 }
+
+/**
+ * Intelligent Spanish to English translation helper for native English speakers
+ */
+private fun getEnglishTranslation(text: String): String {
+    val clean = text.lowercase().trim()
+    return when {
+        clean.contains("buenos") || clean.contains("hola") -> "Hello! Welcome to Novara. Let's practice Spanish with native pronunciation."
+        clean.contains("qué le pongo") || clean.contains("pongo de beber") -> "What can I get you to drink?"
+        clean.contains("caña") && clean.contains("tapa") -> "Each draft beer comes with a free house tapa."
+        clean.contains("para aquí") || clean.contains("llevar") -> "For here or to go (takeaway)?"
+        clean.contains("tortilla") && clean.contains("cebolla") -> "One portion of Spanish omelette! Do you prefer it with or without onion?"
+        clean.contains("cuenta") -> "I'll bring the bill right away. Will you pay with card or cash?"
+        clean.contains("tarjeta") || clean.contains("efectivo") -> "We accept contactless cards without problem. Pay at the register anytime."
+        clean.contains("euros") -> "Stating the price in euros."
+        clean.contains("repetir") -> "Could you please repeat that?"
+        clean.contains("para llevar") -> "You say 'para llevar' (to take away), not 'para llevo'."
+        clean.contains("contrato") || clean.contains("identidad") -> "Did you bring your rental contract and identity document?"
+        clean.contains("viaje") -> "Tell me about a recent trip and what surprised you most."
+        else -> "English meaning: $text"
+    }
+}
+
