@@ -1,0 +1,315 @@
+/* ═══════════════════════════════════════════════════════════
+   Onboarding Page — Glassmorphism & Multi-Step Wizard
+   ═══════════════════════════════════════════════════════════ */
+
+.onboarding-page {
+  position: relative;
+  min-height: 100dvh;
+  padding: 30px 20px 70px;
+  display: flex;
+  justify-content: center;
+  overflow-x: hidden;
+}
+
+.onboarding-container {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 36px;
+}
+
+.onboarding-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.onboarding-step-label {
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+}
+
+.onboarding-step {
+  margin-bottom: 36px;
+}
+
+.step-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  margin-bottom: 12px;
+}
+
+.onboarding-step h2 {
+  font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+/* Native Language Grid */
+.native-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.native-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.native-card:hover {
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(15, 23, 42, 0.85);
+  transform: translateY(-2px);
+}
+
+.native-card.active {
+  border-color: var(--accent);
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+}
+
+.native-flag {
+  font-size: 1.8rem;
+  flex-shrink: 0;
+}
+
+.native-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.native-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+}
+
+.native-tip {
+  font-size: 0.72rem;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+/* Target Accent Cards */
+.accent-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.accent-target-card {
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+
+.accent-target-card:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  transform: translateY(-2px);
+}
+
+.accent-target-card.active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.2);
+}
+
+.accent-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+}
+
+.accent-desc {
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+
+/* Level Cards */
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.level-card {
+  padding: 20px 18px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  backdrop-filter: blur(10px);
+}
+
+.level-card:hover {
+  border-color: rgba(16, 185, 129, 0.4);
+  transform: translateY(-2px);
+}
+
+.level-card-active {
+  border-color: var(--accent) !important;
+  background: rgba(16, 185, 129, 0.14) !important;
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.22);
+}
+
+.level-code {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.level-label {
+  font-weight: 600;
+  font-size: 1rem;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.level-desc {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* Purpose Cards */
+.purpose-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.purpose-card {
+  padding: 22px 18px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  backdrop-filter: blur(10px);
+}
+
+.purpose-card:hover {
+  border-color: rgba(16, 185, 129, 0.4);
+  transform: translateY(-2px);
+}
+
+.purpose-card-active {
+  border-color: var(--accent) !important;
+  background: rgba(16, 185, 129, 0.14) !important;
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.22);
+}
+
+.purpose-emoji {
+  font-size: 2rem;
+  margin-bottom: 8px;
+}
+
+.purpose-label {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: #fff;
+  margin-bottom: 6px;
+}
+
+.purpose-desc {
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+/* Chips */
+.chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.chip-active {
+  background: rgba(16, 185, 129, 0.2) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+  font-weight: 600;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.25);
+}
+
+.chip-gold.chip-active {
+  background: rgba(245, 158, 11, 0.2) !important;
+  border-color: var(--gold) !important;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.25);
+}
+
+/* Actions */
+.onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 32px;
+}
+
+.onboarding-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  margin-top: 20px;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 600px) {
+  .native-grid,
+  .accent-target-grid,
+  .level-grid,
+  .purpose-grid {
+    grid-template-columns: 1fr;
+  }
+}

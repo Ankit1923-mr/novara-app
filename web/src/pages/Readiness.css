@@ -1,0 +1,295 @@
+/* ═══════════════════════════════════════════════════════════
+   Readiness Page — Diagnostics & Accent Analytics
+   ═══════════════════════════════════════════════════════════ */
+
+.readiness-page {
+  position: relative;
+  min-height: 100dvh;
+  padding: 30px 20px 70px;
+  display: flex;
+  justify-content: center;
+  overflow-x: hidden;
+}
+
+.readiness-container {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.readiness-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32px;
+}
+
+.readiness-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Loading / Error */
+.readiness-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 60px 24px;
+  gap: 16px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  backdrop-filter: blur(12px);
+}
+
+/* Hero Score Section */
+.readiness-score-section {
+  display: flex;
+  align-items: center;
+  gap: 36px;
+  padding: 32px;
+  margin-bottom: 24px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  border-radius: var(--radius-xl);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+}
+
+.readiness-ring-wrapper {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+}
+
+.readiness-ring {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.3));
+}
+
+.readiness-ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.readiness-ring-score {
+  font-family: var(--font-display);
+  font-size: 2.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.readiness-ring-sub {
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.verdict-tag {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.readiness-verdict h2 {
+  font-size: 1.7rem;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.readiness-verdict p {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* Accent & Phonetics Card */
+.readiness-accent-card {
+  padding: 24px;
+  margin-bottom: 24px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.accent-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.accent-badge {
+  font-size: 0.68rem;
+  color: #38bdf8;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.accent-card-header h3 {
+  font-size: 1.25rem;
+  color: #fff;
+  margin: 0;
+}
+
+.exemplar-audio-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.exemplar-audio-btn:hover {
+  background: rgba(56, 189, 248, 0.28);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
+}
+
+.exemplar-audio-btn.playing {
+  background: #0284c7;
+  color: #fff;
+}
+
+.accent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.accent-stat {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.accent-stat-val {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.accent-stat-lbl {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.accent-coaching-box {
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--gold);
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+}
+
+/* Dimension Cards */
+.readiness-dimensions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.readiness-dim {
+  padding: 18px 20px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(10px);
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.readiness-dim:hover {
+  transform: translateY(-2px);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.readiness-dim-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.readiness-dim-icon {
+  font-size: 1.4rem;
+}
+
+.readiness-dim-info {
+  flex: 1;
+}
+
+.readiness-dim-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+}
+
+.readiness-dim-desc {
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.readiness-dim-score {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.readiness-dim-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.readiness-dim-bar .progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.readiness-dim-weight {
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+/* Actions */
+.readiness-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 600px) {
+  .readiness-score-section {
+    flex-direction: column;
+    text-align: center;
+    gap: 20px;
+  }
+  .accent-grid {
+    grid-template-columns: 1fr;
+  }
+  .accent-card-header {
+    flex-direction: column;
+  }
+}
