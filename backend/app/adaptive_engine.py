@@ -139,4 +139,9 @@ def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]]
         "situation_tags": sorted({t for n in nodes for t in n["situation_tags"]}),
         "opening_line": opening_line,
         "selection_scores": selection_scores,
+        # The single situation this scenario was built around - what
+        # recently_seen should track, as opposed to situation_tags above
+        # (every tag on every matching phrase, which over-fills the recency
+        # window after just one or two scenarios).
+        "chosen_situation": tag,
     }

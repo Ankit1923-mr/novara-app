@@ -91,7 +91,6 @@ app.add_middleware(
 
 
 CONVERSATION_UPDATE_MAX_RETRIES = 5
-RECENTLY_SEEN_WINDOW = 4
 
 
 @app.exception_handler(Exception)
@@ -241,14 +240,18 @@ def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH)
         recently_seen=learner.recently_seen,
     )
 
-    # Rolling window, not unbounded history: once every situation tag for a
-    # purpose has been seen at least once, an ever-growing list would zero
-    # out the novelty bonus for everything and freeze scenario selection on
-    # whichever tag wins the tie-break, forever. Keeping only the most
-    # recent RECENTLY_SEEN_WINDOW tags lets novelty cycle back around.
-    recently_seen = [t for t in learner.recently_seen if t not in scenario["situation_tags"]]
-    recently_seen.extend(scenario["situation_tags"])
-    learner.recently_seen = recently_seen[-RECENTLY_SEEN_WINDOW:]
+    # Track only the single situation the scenario was built around, not
+    # every tag on every matching phrase - situation_tags can carry 2-4
+    # tags per scenario, which filled a small fixed window in one or two
+    # calls and made selection oscillate between just 2 situations.
+    # Window scales with how many situations this purpose has, so a learner
+    # rotates through (almost) all of them before anything repeats.
+    situations_for_purpose = list_situations(learner.purpose)
+    window = max(1, len(situations_for_purpose) - 1)
+
+    recently_seen = [t for t in learner.recently_seen if t != scenario["chosen_situation"]]
+    recently_seen.append(scenario["chosen_situation"])
+    learner.recently_seen = recently_seen[-window:]
 
     scenario_row = db.get(ScenarioModel, scenario["scenario_id"])
     if scenario_row is None:
