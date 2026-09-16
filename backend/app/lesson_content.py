@@ -125,10 +125,16 @@ def grade_quiz(topic_id: str, answers: list[int]) -> dict:
     quiz = topic["quiz"]
     correct_count = 0
     missed_phrases = []
+    # Per-question correctness, in order — lets the caller run the same
+    # per-turn pace adjustment used in /conversation across quiz questions,
+    # instead of quiz mistakes only affecting mistake_words.
+    per_question_correct: list[bool] = []
 
     for i, question in enumerate(quiz):
         given = answers[i] if i < len(answers) else None
-        if given == question["correct_index"]:
+        is_correct = given == question["correct_index"]
+        per_question_correct.append(is_correct)
+        if is_correct:
             correct_count += 1
         else:
             missed_phrases.append(question["link_phrase"])
@@ -142,4 +148,5 @@ def grade_quiz(topic_id: str, answers: list[int]) -> dict:
         "correct_count": correct_count,
         "total": total,
         "missed_phrases": missed_phrases,
+        "per_question_correct": per_question_correct,
     }

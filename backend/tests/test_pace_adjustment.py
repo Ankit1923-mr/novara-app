@@ -178,3 +178,36 @@ def test_manual_pace_override_resets_streak_counters():
     }).json()
     assert r["pace_changed"] is False
     assert r["pace_preference"] == 1.5
+
+
+# ---------------------------------------------------------------- integration: quiz wiring
+
+def test_two_wrong_quiz_answers_also_slow_down_pace():
+    learner_id = _make_learner("pace_quiz_slowdown@example.com")
+    # "greetings" has 4 questions; correct_index values are [1, 2, 3, 0] —
+    # answer the first two wrong (0, 0) and the rest right.
+    resp = client.post("/topics/greetings/submit", json={
+        "learner_id": learner_id,
+        "answers": [0, 0, 3, 0],
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["correct_count"] == 2  # only the last two were right
+    assert body["pace_changed"] is True
+    assert body["pace_preference"] == 1.0 - PACE_STEP
+    assert body["pace_change_reason"] == "slowed down after 2 mistakes in a row"
+
+    me = client.get(f"/me?learner_id={learner_id}").json()
+    assert me["pace_preference"] == 1.0 - PACE_STEP
+
+
+def test_all_correct_quiz_does_not_change_pace():
+    learner_id = _make_learner("pace_quiz_allcorrect@example.com")
+    resp = client.post("/topics/greetings/submit", json={
+        "learner_id": learner_id,
+        "answers": [1, 2, 3, 0],  # all correct
+    })
+    body = resp.json()
+    assert body["correct_count"] == 4
+    assert body["pace_changed"] is False
+    assert body["pace_preference"] == 1.0

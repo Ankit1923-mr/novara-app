@@ -171,3 +171,8 @@ class QuizResult(BaseModel):
     correct_count: int
     total: int
     missed_phrases: list[str]  # vocabulary tied to questions the learner got wrong, feeds mistake_words
+    # Additive fields — quiz questions run through the same automatic pace
+    # adjustment as /conversation turns, so a quiz can also move pace.
+    pace_changed: bool = False
+    pace_change_reason: Optional[str] = None
+    pace_preference: Optional[float] = None

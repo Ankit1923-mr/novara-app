@@ -539,10 +539,42 @@ def submit_quiz(topic_id: str, req: QuizSubmission, db: Session = Depends(get_db
     if result["score"] >= 0.7 and topic_id not in learner.topics_completed:
         learner.topics_completed = learner.topics_completed + [topic_id]
 
+    # Run each quiz question through the same automatic pace adjustment as
+    # a /conversation turn, in order — a quiz mistake is a mistake whether
+    # it happens in a live conversation or a quiz, and the learner should
+    # see the same slow-down/speed-up behavior either way, not just have
+    # quiz mistakes silently absorbed into mistake_words.
+    pace_before = learner.pace_preference
+    pace_preference = learner.pace_preference
+    consecutive_correct = learner.consecutive_correct
+    consecutive_repairs = learner.consecutive_repairs
+    pace_change_reason = None
+    for is_correct in result["per_question_correct"]:
+        update = next_pace_preference(
+            current_pace_preference=pace_preference,
+            consecutive_correct=consecutive_correct,
+            consecutive_repairs=consecutive_repairs,
+            repair_triggered=not is_correct,
+        )
+        pace_preference = update["pace_preference"]
+        consecutive_correct = update["consecutive_correct"]
+        consecutive_repairs = update["consecutive_repairs"]
+        if update["pace_changed"]:
+            pace_change_reason = update["pace_change_reason"]  # last threshold crossed wins, if more than one
+
+    learner.pace_preference = pace_preference
+    learner.consecutive_correct = consecutive_correct
+    learner.consecutive_repairs = consecutive_repairs
+
     _bump_streak(learner)
     db.commit()
 
-    return QuizResult(**result)
+    return QuizResult(
+        **result,
+        pace_changed=pace_preference != pace_before,
+        pace_change_reason=pace_change_reason,
+        pace_preference=pace_preference,
+    )
 
 
 @app.post("/profile/pace", dependencies=[Depends(verify_api_key)])
