@@ -165,3 +165,18 @@ The same reviewer went one level deeper: instead of testing new scenarios, it te
 **Root-cause pattern across all three fixes in this round**: the same mistake, in three different shapes — checking or removing state through a reference/read that can go stale (or detached) before the corresponding write actually lands. The fix each time was to make the check part of the same atomic operation as the write (SQL WHERE clause), or to never replace a shared mutable reference that another party might still be holding (in-place list mutation).
 
 **Result**: 3 new tests (`test_judge_interleavings.py`) targeting these exact interleavings, all passing. Full external suite (core + both follow-up rounds): 558/558. Added `profile_generation` column to production Supabase via the same one-off `ALTER TABLE` pattern as `version_id` earlier, verified locally against real Postgres before deploying this time (not just SQLite) — the round-1 Postgres `round()` incident made that the standing rule going forward.
+
+### [2026-09-15] Documented gap: no pedagogical staging between Lesson and Practice
+
+Raised during review prep: a brand-new (A1) learner can go straight from reading 4 vocab cards to a fully open-ended LLM conversation in Practice, with no intermediate step. Real second-language pedagogy stages this — recognition, then guided/constrained production, then free production — and NOVARA currently skips from the first straight to the last. The Lesson and Practice modules are sequenced on the dashboard but not pedagogically linked; nothing scaffolds Practice's difficulty down for a learner who just finished their first topic.
+
+**Not fixed now** — flagged as documented future work, not silently ignored: the fix is a constrained-conversation stage between Lesson and Practice, where the AI partner expects (and only lightly deviates from) the exact phrases just taught, with a "suggested reply" affordance instead of requiring free typing, unlocking full free-form Practice only once that stage is passed for a topic. Requires a new Conversation Partner mode plus dashboard/gating changes — out of scope for the current review window, in scope for the next.
+
+**Planned fix (post-review), scoped so it's ready to pick up directly:**
+
+1. **New Conversation Partner mode** ("guided") — reuse `conversation_engine.py`'s existing `call_llm` plumbing, but constrain `build_system_prompt()`: pass in the topic's known vocab phrases and instruct the LLM to only use those, gently steering the learner back on-script if they wander rather than opening into full free dialogue. Prompt-only change, no new infra.
+2. **Suggested-reply chips in the UI** — instead of a blank text input, show 2-3 tappable buttons pulled from `lesson_content.py`'s existing vocab list for that topic; learner can tap one or type their own attempt. Removes the "blank page" problem for an absolute beginner.
+3. **Gating** — extend the existing `topics_completed` threshold-lock pattern (already built for the Dashboard's winding path) one level deeper: Practice (free-form) for a topic unlocks only after Guided Practice is passed for that topic. Sequence becomes Vocab → Quiz → Guided Practice → Practice.
+4. **No changes needed** to Personalization or Readiness Engines — both already treat "turns" and "repairs" generically regardless of which conversation mode produced them.
+
+Likely needs one new field (`scenario_type: "guided" | "free"`) on the scenario object and a small Dashboard/routing change — everything else is additive to existing modules, not a rewrite.

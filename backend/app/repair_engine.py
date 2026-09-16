@@ -149,8 +149,26 @@ def repair(utterance: str, expected_pattern: str) -> dict:
 REPAIR_TRIGGER_MIN_OVERLAP = 0.3
 REPAIR_TRIGGER_MAX_OVERLAP = 0.85  # above this, close enough — no repair needed
 
+# Pace-adjusted leniency: a learner at a relaxed pace is more forgiven for
+# being "close enough" (lower bar to skip repair) and more of their attempts
+# get recognized as worth correcting at all (lower floor); a learner at a
+# fast pace is held to a stricter standard on both ends. Steady pace uses
+# the plain defaults above.
+RELAXED_TRIGGER_BOUNDS = (0.2, 0.75)
+FAST_TRIGGER_BOUNDS = (0.35, 0.9)
 
-def detect_repair(utterance: str, candidate_patterns: list[str]) -> dict | None:
+
+def _trigger_bounds(pace_preference: float | None) -> tuple[float, float]:
+    if pace_preference is None:
+        return REPAIR_TRIGGER_MIN_OVERLAP, REPAIR_TRIGGER_MAX_OVERLAP
+    if pace_preference <= 0.75:
+        return RELAXED_TRIGGER_BOUNDS
+    if pace_preference >= 1.5:
+        return FAST_TRIGGER_BOUNDS
+    return REPAIR_TRIGGER_MIN_OVERLAP, REPAIR_TRIGGER_MAX_OVERLAP
+
+
+def detect_repair(utterance: str, candidate_patterns: list[str], pace_preference: float | None = None) -> dict | None:
     """Finds the graph phrase closest to `utterance` among
     `candidate_patterns` and decides whether it's worth repairing.
 
@@ -179,8 +197,9 @@ def detect_repair(utterance: str, candidate_patterns: list[str]) -> dict | None:
             best_overlap = overlap
             best_pattern = pattern
 
-    if best_overlap >= REPAIR_TRIGGER_MAX_OVERLAP:
+    min_overlap, max_overlap = _trigger_bounds(pace_preference)
+    if best_overlap >= max_overlap:
         return None  # close enough, no repair
-    if best_overlap < REPAIR_TRIGGER_MIN_OVERLAP:
+    if best_overlap < min_overlap:
         return None  # not a recognizable attempt at any known phrase — free-form reply
     return repair(utterance, best_pattern)

@@ -16,6 +16,7 @@ See docs/api-contract.md for the frozen request/response shapes.
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, date, timedelta
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -51,6 +52,7 @@ from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
 from app.personalization_engine import (
     update_scores, EMA_ALPHA, CONFIDENT_SIGNAL, UNCONFIDENT_SIGNAL, pace_signal_from_response_time,
+    next_pace_preference,
 )
 from app.readiness_engine import compute_readiness
 from app.db import get_db, init_db
@@ -292,12 +294,14 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
     # current scores, so they run once - only the score/counter update
     # below needs to be retried under contention.
     appended_messages: list[dict] = []
+    pace_update: Optional[dict] = None
     try:
         reply, appended_messages = handle_turn(
             learner_id=req.learner_id,
             scenario=scenario,
             message=req.message,
             turn_number=req.turn_number,
+            pace_preference=learner.pace_preference,
         )
 
         # Check the learner's message against the graph phrases relevant to
@@ -310,7 +314,7 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
             for n in get_subgraph(scenario["purpose"], situation_tag=tag)
         ]
         candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
-        repair_result = detect_repair(req.message, candidate_patterns)
+        repair_result = detect_repair(req.message, candidate_patterns, pace_preference=learner.pace_preference)
 
         # Personalization Engine is still the source of truth for the EMA
         # formula/signals — called here so its documented role holds even
@@ -365,6 +369,13 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                 error_type = repair_result["error_type"]
                 repair_counts[error_type] = repair_counts.get(error_type, 0) + 1
 
+            pace_update = next_pace_preference(
+                current_pace_preference=current.pace_preference,
+                consecutive_correct=current.consecutive_correct,
+                consecutive_repairs=current.consecutive_repairs,
+                repair_triggered=repair_result is not None,
+            )
+
             values = {
                 "total_turns": current.total_turns + 1,
                 "version_id": current.version_id + 1,
@@ -377,6 +388,9 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                 "confidence_score": func.round(
                     cast(EMA_ALPHA * confidence_signal + (1 - EMA_ALPHA) * current.confidence_score, Numeric), 4
                 ),
+                "pace_preference": pace_update["pace_preference"],
+                "consecutive_correct": pace_update["consecutive_correct"],
+                "consecutive_repairs": pace_update["consecutive_repairs"],
             }
             if pace_signal is not None:
                 values["pace_score"] = func.round(
@@ -426,6 +440,9 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         reply=reply,
         repair_triggered=repair_result is not None,
         repair=RepairDetail(**repair_result) if repair_result else None,
+        pace_changed=pace_update["pace_changed"] if pace_update else False,
+        pace_change_reason=pace_update["pace_change_reason"] if pace_update else None,
+        pace_preference=pace_update["pace_preference"] if pace_update else None,
     )
 
 
@@ -534,10 +551,17 @@ def set_pace_preference(learner_id: str = Query(min_length=1, max_length=MAX_ID_
                          db: Session = Depends(get_db)):
     """Learner-controlled speed multiplier - distinct from pace_score,
     which the Personalization Engine infers from response times. This is
-    the direct 'faster / slower' control the UI exposes."""
+    the direct 'faster / slower' control the UI exposes.
+
+    Resets the auto-adjustment streak counters: a manual override is the
+    learner explicitly asserting a value, so automatic adjustment should
+    resume counting from here, not immediately re-trigger off a streak
+    that was already in progress before they acted."""
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
     learner.pace_preference = pace_preference
+    learner.consecutive_correct = 0
+    learner.consecutive_repairs = 0
     db.commit()
     return {"learner_id": learner_id, "pace_preference": pace_preference}

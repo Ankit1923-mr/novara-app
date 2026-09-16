@@ -29,6 +29,62 @@ SLOW_MS = 15000
 CONFIDENT_SIGNAL = 0.8   # turn needed no repair
 UNCONFIDENT_SIGNAL = 0.2  # turn needed repair
 
+# Automatic pace adjustment: distinct from pace_score above (which only
+# reacts to response time). This reacts to correctness - repeated mistakes
+# slow the learner down, a sustained correct streak speeds them up - and
+# writes directly to pace_preference, the same field the learner's manual
+# +/- control uses, so there's one number every module reads regardless of
+# who moved it last.
+REPAIRS_BEFORE_SLOWING_DOWN = 2
+CORRECT_STREAK_BEFORE_SPEEDING_UP = 10
+PACE_STEP = 0.25
+PACE_MIN = 0.5
+PACE_MAX = 2.0
+
+
+def next_pace_preference(
+    current_pace_preference: float,
+    consecutive_correct: int,
+    consecutive_repairs: int,
+    repair_triggered: bool,
+) -> dict:
+    """One turn's worth of automatic pace adjustment.
+
+    Returns {pace_preference, consecutive_correct, consecutive_repairs,
+    pace_changed, pace_change_reason}. The counters always update; the
+    preference itself only moves once a streak threshold is actually
+    crossed, at which point the triggering counter resets to 0 so the next
+    adjustment requires a fresh streak, not one more turn past the
+    threshold.
+    """
+    new_pace = current_pace_preference
+    reason: Optional[str] = None
+
+    if repair_triggered:
+        new_correct = 0
+        new_repairs = consecutive_repairs + 1
+        if new_repairs >= REPAIRS_BEFORE_SLOWING_DOWN:
+            new_pace = max(PACE_MIN, round(current_pace_preference - PACE_STEP, 2))
+            new_repairs = 0
+            if new_pace != current_pace_preference:
+                reason = f"slowed down after {REPAIRS_BEFORE_SLOWING_DOWN} mistakes in a row"
+    else:
+        new_repairs = 0
+        new_correct = consecutive_correct + 1
+        if new_correct >= CORRECT_STREAK_BEFORE_SPEEDING_UP:
+            new_pace = min(PACE_MAX, round(current_pace_preference + PACE_STEP, 2))
+            new_correct = 0
+            if new_pace != current_pace_preference:
+                reason = f"sped up after {CORRECT_STREAK_BEFORE_SPEEDING_UP} correct turns in a row"
+
+    return {
+        "pace_preference": new_pace,
+        "consecutive_correct": new_correct,
+        "consecutive_repairs": new_repairs,
+        "pace_changed": reason is not None,
+        "pace_change_reason": reason,
+    }
+
 
 def _ema(old_value: float, new_signal: float, alpha: float = EMA_ALPHA) -> float:
     return alpha * new_signal + (1 - alpha) * old_value

@@ -53,6 +53,16 @@ class LearnerModel(Base):
     mistake_words = Column(JSON, default=dict)          # {"vocab phrase": wrong_count}
     cefr_level = Column(String, nullable=True)          # e.g. "A1" - set once thresholds are met
 
+    # --- Automatic pace adjustment ---
+    # Counters the Personalization Engine uses to move pace_preference on
+    # its own (2 repairs in a row -> slower, 10 correct in a row -> faster),
+    # independent of pace_score's response-time signal above. Both counters
+    # reset to 0 whenever the learner manually overrides pace_preference via
+    # /profile/pace, so auto-adjustment resumes counting from wherever the
+    # learner explicitly chose, rather than fighting their override.
+    consecutive_correct = Column(Integer, default=0)
+    consecutive_repairs = Column(Integer, default=0)
+
     __mapper_args__ = {"version_id_col": version_id}
 
 

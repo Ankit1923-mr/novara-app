@@ -17,7 +17,28 @@ from app.llm_client import call_llm
 HISTORY: dict[tuple[str, str], list[dict]] = {}
 
 
-def build_system_prompt(scenario: dict) -> str:
+def _pace_note(pace_preference: Optional[float]) -> str:
+    """Translates the learner's pace_preference (0.5-2.0, moved either by
+    their own +/- control or by automatic adjustment in main.py) into a
+    concrete instruction for reply complexity - this is the cheapest,
+    highest-leverage place for pace to actually affect what the learner
+    experiences, rather than existing only as a number on a dashboard."""
+    if pace_preference is None:
+        return ""
+    if pace_preference <= 0.75:
+        return (
+            " The learner is at a relaxed pace — use very simple, short sentences, "
+            "common everyday vocabulary, and avoid idioms or regional slang."
+        )
+    if pace_preference >= 1.5:
+        return (
+            " The learner is at a fast pace — use natural, native-speed complexity, "
+            "including idioms or colloquial phrasing where they fit the scene."
+        )
+    return ""  # steady (0.75-1.5): no special instruction, current default behavior
+
+
+def build_system_prompt(scenario: dict, pace_preference: Optional[float] = None) -> str:
     register_note = (
         "Use informal, casual Spanish (tú form, colloquial expressions) "
         "appropriate for a relaxed conversation."
@@ -32,11 +53,12 @@ def build_system_prompt(scenario: dict) -> str:
         "Stay in character and in Spanish only. Keep replies short (1-2 sentences), "
         "natural, and consistent with the scenario. Do not break character or "
         "explain grammar — just respond as the person in the scene would."
+        f"{_pace_note(pace_preference)}"
     )
 
 
 def handle_turn(learner_id: str, scenario: dict, message: str, turn_number: int,
-                 client: Optional[object] = None) -> tuple[str, list[dict]]:
+                 client: Optional[object] = None, pace_preference: Optional[float] = None) -> tuple[str, list[dict]]:
     """Returns (reply, appended_messages) — the caller keeps `appended_messages`
     so that if something downstream fails, it can roll back exactly the
     entries THIS call added via remove_turn_from_history(), rather than
@@ -59,7 +81,7 @@ def handle_turn(learner_id: str, scenario: dict, message: str, turn_number: int,
         history.append(user_msg)
         appended.append(user_msg)
 
-        system_prompt = build_system_prompt(scenario)
+        system_prompt = build_system_prompt(scenario, pace_preference=pace_preference)
         reply = call_llm(system_prompt, history, client=client)
 
         assistant_msg = {"role": "assistant", "content": reply}

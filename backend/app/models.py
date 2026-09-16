@@ -71,6 +71,12 @@ class ConversationResponse(BaseModel):
     reply: str
     repair_triggered: bool
     repair: Optional[RepairDetail] = None
+    # Additive fields (not part of the frozen contract) — surfaces automatic
+    # pace adjustment so the frontend can show *when and why* pace moved,
+    # not just silently update the number on the next /me poll.
+    pace_changed: bool = False
+    pace_change_reason: Optional[str] = None
+    pace_preference: Optional[float] = None
 
 
 class RepairRequest(BaseModel):
