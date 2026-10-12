@@ -55,16 +55,66 @@ fun ConversationScreen(
     var turnNumber by remember { mutableIntStateOf(0) }
     var isSending by remember { mutableStateOf(false) }
     var isMockMode by remember { mutableStateOf(repository.isMockMode) }
+    // Non-null exactly when the last send attempt failed - holds the EXACT
+    // text/turn that failed so Retry resends the same turn instead of
+    // treating it as a new message (which would duplicate the user's bubble
+    // and advance turnNumber past what the backend may have already seen).
+    var failedSend by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    fun performSend(text: String, turn: Int) {
+        isSending = true
+        failedSend = null
+
+        scope.launch {
+            val responseResult = repository.sendMessage(
+                learnerId = learnerId,
+                scenarioId = scenario.scenarioId,
+                message = text,
+                turnNumber = turn
+            )
+
+            isSending = false
+
+            responseResult.onSuccess { resp ->
+                messages.add(
+                    ChatMessage(
+                        id = "a_$turn",
+                        role = MessageRole.ASSISTANT,
+                        text = resp.reply
+                    )
+                )
+
+                // Add inline repair if triggered (Task 5 core requirement)
+                if (resp.repairTriggered && resp.repair != null) {
+                    messages.add(
+                        ChatMessage(
+                            id = "r_$turn",
+                            role = MessageRole.REPAIR,
+                            text = resp.repair.repairText,
+                            errorType = resp.repair.errorType,
+                            strategy = resp.repair.strategy
+                        )
+                    )
+                }
+            }.onFailure {
+                // Surface the failure instead of silently dropping the
+                // reply - the user's own message bubble (added before this
+                // call) stays visible, with a retry affordance below it.
+                failedSend = text to turn
+            }
+
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     fun sendMessage() {
         val text = inputText.trim()
         if (text.isBlank() || isSending) return
 
         inputText = ""
-        isSending = true
 
         val newTurn = turnNumber + 1
         turnNumber = newTurn
@@ -83,43 +133,20 @@ fun ConversationScreen(
             )
         )
 
-        scope.launch {
-            val responseResult = repository.sendMessage(
-                learnerId = learnerId,
-                scenarioId = scenario.scenarioId,
-                message = text,
-                turnNumber = newTurn
-            )
+        performSend(text, newTurn)
+    }
 
-            isSending = false
-            val resp = responseResult.getOrNull()
-
-            if (resp != null) {
-                // Add AI Reply
-                messages.add(
-                    ChatMessage(
-                        id = "a_$newTurn",
-                        role = MessageRole.ASSISTANT,
-                        text = resp.reply
-                    )
-                )
-
-                // Add inline repair if triggered (Task 5 core requirement)
-                if (resp.repairTriggered && resp.repair != null) {
-                    messages.add(
-                        ChatMessage(
-                            id = "r_$newTurn",
-                            role = MessageRole.REPAIR,
-                            text = resp.repair.repairText,
-                            errorType = resp.repair.errorType,
-                            strategy = resp.repair.strategy
-                        )
-                    )
-                }
-            }
-
-            listState.animateScrollToItem(messages.size - 1)
-        }
+    fun retryLastSend() {
+        val (text, turn) = failedSend ?: return
+        // Re-sends the exact same text/turn - does not touch `messages` or
+        // `turnNumber`, so nothing is duplicated on the Android side. The
+        // backend itself has no idempotency guard on turn_number (see
+        // docs/challenges.md discussion), so a retry after a failure where
+        // the backend actually processed the request but the response was
+        // lost in transit can still double-count server-side; this is a
+        // known, reported limitation, not something this UI-level fix can
+        // close on its own.
+        performSend(text, turn)
     }
 
     Column(
@@ -323,6 +350,24 @@ fun ConversationScreen(
             if (isSending) {
                 item {
                     Text("AI is typing…", color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
+                }
+            }
+        }
+
+        if (failedSend != null) {
+            // Visible failure + retry, replacing the old behavior of
+            // silently dropping the reply on error.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(BgElevated)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("⚠ Message didn't send", fontSize = 12.sp, color = TextSecondary)
+                TextButton(onClick = { retryLastSend() }, enabled = !isSending) {
+                    Text("Retry", color = AccentEmerald, fontSize = 12.sp)
                 }
             }
         }

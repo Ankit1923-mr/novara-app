@@ -41,7 +41,11 @@ val ALL_WEAK_AREAS = listOf("pronunciation", "listening", "speaking", "grammar",
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun IntakeScreen(
-    onProfileCreated: (LearnerProfile) -> Unit,
+    // Returns true on success (caller navigates onward) or false on
+    // failure (stays on this screen, caller does NOT navigate) - replaces
+    // the previous fire-and-forget Unit callback, which let navigation to
+    // "scenario" proceed even when /profile creation failed.
+    onProfileCreated: suspend (LearnerProfile) -> Boolean,
     onNavigateBack: () -> Unit
 ) {
     var selectedLevel by remember { mutableStateOf("B1") }
@@ -269,7 +273,15 @@ fun IntakeScreen(
                     nativeLanguage = nativeLanguage
                 )
 
-                onProfileCreated(profile)
+                scope.launch {
+                    val success = onProfileCreated(profile)
+                    isLoading = false
+                    if (!success) {
+                        errorMessage = "Couldn't create your profile. Check your connection and try again."
+                    }
+                    // On success, the caller navigates away - no further
+                    // state change needed here.
+                }
             },
             modifier = Modifier
                 .fillMaxWidth()

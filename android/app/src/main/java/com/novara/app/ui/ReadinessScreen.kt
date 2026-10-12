@@ -43,16 +43,24 @@ fun ReadinessScreen(
     var selectedSample by remember { mutableStateOf("live") }
     var readinessData by remember { mutableStateOf<ReadinessResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
     fun loadData(sampleKey: String) {
         isLoading = true
+        errorMessage = null
         scope.launch {
             if (sampleKey == "live") {
                 val result = repository.getReadiness(learnerId)
-                readinessData = result.getOrNull() ?: MockDataProvider.readinessPayloads["mid"]
+                result.onSuccess {
+                    readinessData = it
+                }.onFailure {
+                    errorMessage = it.message ?: "Couldn't reach the backend."
+                }
             } else {
+                // Explicit sample buttons - never claimed to be live, so no
+                // error/fallback semantics apply here.
                 readinessData = MockDataProvider.readinessPayloads[sampleKey]
             }
             isLoading = false
@@ -128,6 +136,25 @@ fun ReadinessScreen(
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = AccentEmerald)
+            }
+        } else if (errorMessage != null && readinessData == null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = BgSurface)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("Couldn't load readiness", fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(errorMessage ?: "", fontSize = 13.sp, color = TextSecondary)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { loadData(selectedSample) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald)
+                    ) {
+                        Text("Retry")
+                    }
+                }
             }
         } else if (readinessData != null) {
             val rd = readinessData!!

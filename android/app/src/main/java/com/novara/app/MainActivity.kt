@@ -17,7 +17,6 @@ import com.novara.app.network.NovaraRepository
 import com.novara.app.ui.*
 import com.novara.app.ui.theme.BgPrimary
 import com.novara.app.ui.theme.NovaraTheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -35,7 +34,6 @@ class MainActivity : ComponentActivity() {
                         .background(BgPrimary)
                 ) {
                     val navController = rememberNavController()
-                    val scope = rememberCoroutineScope()
 
                     // Task 3: If profile is saved on disk, resume into scenario; else intake
                     val startDestination = remember {
@@ -50,18 +48,22 @@ class MainActivity : ComponentActivity() {
                         composable("intake") {
                             IntakeScreen(
                                 onProfileCreated = { newProfile ->
-                                    scope.launch {
-                                        // Save locally (Task 3)
-                                        profileStore.saveProfile(newProfile)
-                                        currentProfile = newProfile
+                                    // Save locally (Task 3)
+                                    profileStore.saveProfile(newProfile)
+                                    currentProfile = newProfile
 
-                                        // Call backend (Task 7)
-                                        repository.createProfile(newProfile)
-
+                                    // Call backend (Task 7) - only navigate
+                                    // onward if it actually succeeded;
+                                    // IntakeScreen shows the failure and
+                                    // keeps the learner on this screen
+                                    // otherwise.
+                                    val result = repository.createProfile(newProfile)
+                                    if (result.isSuccess) {
                                         navController.navigate("scenario") {
                                             popUpTo("intake") { inclusive = true }
                                         }
                                     }
+                                    result.isSuccess
                                 },
                                 onNavigateBack = {
                                     if (profileStore.hasValidProfile()) {

@@ -17,7 +17,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.novara.app.data.MockDataProvider
 import com.novara.app.model.ScenarioResponse
 import com.novara.app.network.NovaraRepository
 import com.novara.app.ui.theme.*
@@ -40,15 +39,21 @@ fun ScenarioScreen(
     var selectedPurpose by remember { mutableStateOf(initialPurpose) }
     var scenario by remember { mutableStateOf<ScenarioResponse?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var isMockMode by remember { mutableStateOf(repository.isMockMode) }
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
     fun loadScenario(purpose: String) {
         isLoading = true
+        errorMessage = null
         scope.launch {
             val result = repository.getScenario(learnerId, purpose)
-            scenario = result.getOrNull() ?: MockDataProvider.getScenarioForPurpose(purpose)
+            result.onSuccess {
+                scenario = it
+            }.onFailure {
+                errorMessage = it.message ?: "Couldn't reach the backend."
+            }
             isLoading = false
         }
     }
@@ -137,8 +142,55 @@ fun ScenarioScreen(
             ) {
                 CircularProgressIndicator(color = AccentEmerald)
             }
+        } else if (errorMessage != null && scenario == null) {
+            // Only shown when there's no prior successful scenario to fall
+            // back to - a retry after an earlier success keeps showing the
+            // last-known-good scenario rather than replacing it with an
+            // error box (see the explicit "preserve existing successful
+            // data" requirement for this fix).
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = BgSurface)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("Couldn't load the scenario", fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(errorMessage ?: "", fontSize = 13.sp, color = TextSecondary)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { loadScenario(selectedPurpose) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald)
+                    ) {
+                        Text("Retry")
+                    }
+                }
+            }
         } else if (scenario != null) {
             val sc = scenario!!
+
+            if (errorMessage != null) {
+                // A retry (e.g. switching purpose) failed, but we still have
+                // the last successful scenario to show - surface the failure
+                // without discarding that data.
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = BgElevated)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("⚠ Couldn't refresh: ${errorMessage}", fontSize = 12.sp, color = TextSecondary)
+                        TextButton(onClick = { loadScenario(selectedPurpose) }) {
+                            Text("Retry", color = AccentEmerald, fontSize = 12.sp)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // Scenario Title & Setting Card
             Card(

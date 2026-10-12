@@ -7,9 +7,10 @@ import com.novara.app.model.*
 /**
  * Task 7: Repository with single Mock <-> Real Backend swap toggle.
  */
-class NovaraRepository(private val profileStore: ProfileStore) {
-
-    private val api = NovaraNetworkClient.api
+class NovaraRepository(
+    private val profileStore: ProfileStore,
+    private val api: NovaraApiService = NovaraNetworkClient.api
+) {
 
     var isMockMode: Boolean
         get() = profileStore.useMock
@@ -54,11 +55,12 @@ class NovaraRepository(private val profileStore: ProfileStore) {
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                // Fallback to mock on error to maintain crash-free experience
-                Result.success(MockDataProvider.getScenarioForPurpose(fallbackPurpose))
+                // Live mode must surface a real failure, not silently substitute
+                // mock content while still showing a "LIVE BACKEND" indicator.
+                Result.failure(Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}"))
             }
         } catch (e: Exception) {
-            Result.success(MockDataProvider.getScenarioForPurpose(fallbackPurpose))
+            Result.failure(e)
         }
     }
 
@@ -79,11 +81,12 @@ class NovaraRepository(private val profileStore: ProfileStore) {
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                // Fallback to mock reply
-                Result.success(MockDataProvider.getReplyForTurn(turnNumber, message))
+                // Live mode must surface a real failure, not silently substitute
+                // a mock reply while still showing a "LIVE BACKEND" indicator.
+                Result.failure(Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}"))
             }
         } catch (e: Exception) {
-            Result.success(MockDataProvider.getReplyForTurn(turnNumber, message))
+            Result.failure(e)
         }
     }
 
@@ -101,10 +104,12 @@ class NovaraRepository(private val profileStore: ProfileStore) {
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                Result.success(MockDataProvider.readinessPayloads["mid"]!!)
+                // Live mode must surface a real failure, not silently substitute
+                // a sample payload while still showing a "LIVE BACKEND" indicator.
+                Result.failure(Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}"))
             }
         } catch (e: Exception) {
-            Result.success(MockDataProvider.readinessPayloads["mid"]!!)
+            Result.failure(e)
         }
     }
 }
