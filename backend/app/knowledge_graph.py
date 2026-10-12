@@ -7,14 +7,54 @@ is deliberately standalone (no FastAPI import) so it can be built and
 tested independently of the rest of the backend, then wired into
 /scenario by the Adaptive Learning Engine.
 
-Graph shape: a flat list of nodes, each tagged with situation_tags and a
-purpose. "Edges" are implicit — two nodes sharing a situation_tag are
-connected by that situation; querying by tag traverses that edge.
+Graph shape: GRAPH is still a flat list of nodes (purpose/situation_tag/
+region filtering is unaffected by anything below — get_subgraph and
+list_situations keep their exact existing signatures and behavior).
+"Edges" between these nodes are implicit — two nodes sharing a
+situation_tag are connected by that situation; querying by tag
+traverses that edge.
+
+EDGES is new: an explicit, directed, typed edge list — the one honest
+graph structure this module has (everything above is still a tagged
+catalogue, not a graph, per the architecture review this was built
+against). It starts empty: no prerequisite or related_situation edges
+have been authored yet for the existing 34 nodes, deliberately deferred
+to a separate, later-approved task. The traversal functions and
+validator below are correct and safe against an empty EDGES list - they
+exist now so the structure is provable before any content is authored
+against it, not because content already uses it.
 """
 
+from collections import defaultdict
+from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
 
 Node = dict
+
+
+class EdgeType(str, Enum):
+    # Directed, asymmetric: from_id must be learned before to_id. Must be
+    # acyclic - see the validator in backend/scripts/validate_knowledge_graph.py.
+    PREREQUISITE = "prerequisite"
+    # Symmetric real-world fact (two situations commonly co-occur).
+    # Stored as two directed edges (A->B and B->A) so every edge type
+    # shares one representation and one query path - see
+    # related_situations_of() below. A resulting 2-cycle here is correct,
+    # not an error; the acyclic rule applies only to PREREQUISITE.
+    RELATED_SITUATION = "related_situation"
+
+
+@dataclass(frozen=True)
+class Edge:
+    from_id: str
+    to_id: str
+    edge_type: EdgeType
+
+
+# Explicit, authored edges - not derived from situation_tags. Empty for
+# now; see the module docstring above for why.
+EDGES: list[Edge] = []
 
 GRAPH: list[Node] = [
     # --- Trip: café / ordering ---
@@ -163,8 +203,91 @@ def list_situations(purpose: str) -> list[str]:
     return sorted(tags)
 
 
+# Built once at import time from GRAPH/EDGES, same pattern as GRAPH itself
+# being a module-level constant. _NODE_INDEX gives get_node() O(1) lookup
+# instead of the previous linear scan; _OUT_ADJACENCY/_IN_ADJACENCY back
+# the traversal functions below. Rebuilding these at import time (rather
+# than lazily) keeps them trivially correct for a static, code-defined
+# graph - there is no mutation path at runtime to go stale against.
+_NODE_INDEX: dict[str, Node] = {n["id"]: n for n in GRAPH}
+_OUT_ADJACENCY: dict[str, list[Edge]] = defaultdict(list)
+_IN_ADJACENCY: dict[str, list[Edge]] = defaultdict(list)
+for _edge in EDGES:
+    _OUT_ADJACENCY[_edge.from_id].append(_edge)
+    _IN_ADJACENCY[_edge.to_id].append(_edge)
+
+
 def get_node(node_id: str) -> Optional[Node]:
-    for n in GRAPH:
-        if n["id"] == node_id:
-            return n
-    return None
+    return _NODE_INDEX.get(node_id)
+
+
+def prerequisites_of(node_id: str) -> list[str]:
+    """Direct (immediate) prerequisites of node_id - one hop. Empty list
+    if none (including for an unknown node_id - never raises); this is
+    the safe default every one of today's 34 nodes has, since no
+    prerequisite edges have been authored yet."""
+    return [e.from_id for e in _IN_ADJACENCY.get(node_id, []) if e.edge_type == EdgeType.PREREQUISITE]
+
+
+def all_prerequisites_of(node_id: str) -> list[str]:
+    """Full transitive closure of prerequisites, via an explicit-stack
+    iterative DFS over PREREQUISITE edges only (not recursive - at
+    1,000+ nodes a sufficiently deep prerequisite chain could exceed
+    Python's default recursion limit with a recursive implementation;
+    an explicit stack has no such bound). Returns a dependency-ordered
+    list: every prerequisite appears before anything that depends on it.
+    Empty list if none.
+
+    Raises ValueError if a cycle is reachable from node_id. This should
+    be unreachable in practice - the validator in
+    backend/scripts/validate_knowledge_graph.py rejects cycles before any
+    content ships - so this is a defensive check, not the primary
+    enforcement mechanism."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    visiting: set[str] = set()
+    # Each stack frame is (node, its direct prerequisites, next index into
+    # that list to process) - the explicit "next index" is what replaces
+    # the call stack a recursive version would otherwise use.
+    stack: list[tuple[str, list[str], int]] = []
+
+    for start in prerequisites_of(node_id):
+        if start in seen:
+            continue
+        if start in visiting:
+            raise ValueError(f"prerequisite cycle detected reachable from {node_id!r} at {start!r}")
+        visiting.add(start)
+        stack.append((start, prerequisites_of(start), 0))
+
+        while stack:
+            current, deps, idx = stack[-1]
+            if idx < len(deps):
+                nxt = deps[idx]
+                stack[-1] = (current, deps, idx + 1)
+                if nxt in seen:
+                    continue
+                if nxt in visiting:
+                    raise ValueError(f"prerequisite cycle detected reachable from {node_id!r} at {nxt!r}")
+                visiting.add(nxt)
+                stack.append((nxt, prerequisites_of(nxt), 0))
+            else:
+                stack.pop()
+                visiting.discard(current)
+                seen.add(current)
+                ordered.append(current)
+
+    return ordered
+
+
+def unlocks(node_id: str) -> list[str]:
+    """Direct nodes that list node_id as an immediate prerequisite - the
+    inverse of prerequisites_of. Empty list if none."""
+    return [e.to_id for e in _OUT_ADJACENCY.get(node_id, []) if e.edge_type == EdgeType.PREREQUISITE]
+
+
+def related_situations_of(node_id: str) -> list[str]:
+    """Nodes related to node_id via a RELATED_SITUATION edge. Symmetric by
+    authoring convention (see EdgeType.RELATED_SITUATION) - both
+    directions are stored explicitly, so this single lookup is correct
+    from either side of the relationship. Empty list if none."""
+    return [e.to_id for e in _OUT_ADJACENCY.get(node_id, []) if e.edge_type == EdgeType.RELATED_SITUATION]
