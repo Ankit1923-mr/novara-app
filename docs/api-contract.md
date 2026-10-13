@@ -56,6 +56,8 @@ Returns the next situational scenario for this learner.
 }
 ```
 
+Also present, added after the freeze (additive, same backward-compatible status as `response_time_ms` below): `"selection_scores"` — an array of per-candidate-situation score breakdowns from the Adaptive Engine (`situation_tag`, `interest_overlap`, `weak_area_overlap`, `novelty_bonus`, `score`). Omit it in client code that doesn't need it; it will still be present in every real response.
+
 ---
 
 ## 3. POST /conversation
@@ -95,6 +97,8 @@ Send a learner message, get the AI partner's reply + repair flag if triggered.
   }
 }
 ```
+
+Also present on every response, added after the freeze (additive, same backward-compatible status as `response_time_ms` above): `"pace_changed"` (bool), `"pace_change_reason"` (string or null), `"pace_preference"` (number or null) — surfaces automatic pace adjustment so a client can show when and why pace moved, instead of only picking it up on the next `/me` poll.
 
 ---
 

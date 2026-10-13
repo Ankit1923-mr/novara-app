@@ -29,13 +29,29 @@ data class ProfileResponse(
 )
 
 // ─── 2. GET /scenario ───────────────────────────────────────────────
+// Additive field, not part of the frozen 5-endpoint contract - exposes
+// the Adaptive Engine's scoring breakdown for each candidate situation.
+// Mirrors backend/app/models.py's SituationScore exactly. Nullable/
+// default-empty since older backend responses (and any response that
+// doesn't populate it) simply omit the field - Gson already tolerated
+// this silently before this field existed in the Kotlin model; this
+// just makes the data representable instead of silently discarded.
+data class SituationScore(
+    @SerializedName("situation_tag") val situationTag: String,
+    @SerializedName("interest_overlap") val interestOverlap: List<String>,
+    @SerializedName("weak_area_overlap") val weakAreaOverlap: List<String>,
+    @SerializedName("novelty_bonus") val noveltyBonus: Int,
+    @SerializedName("score") val score: Int
+)
+
 data class ScenarioResponse(
     @SerializedName("scenario_id") val scenarioId: String,
     @SerializedName("purpose") val purpose: String,
     @SerializedName("title") val title: String,
     @SerializedName("setting") val setting: String,
     @SerializedName("situation_tags") val situationTags: List<String>,
-    @SerializedName("opening_line") val openingLine: String
+    @SerializedName("opening_line") val openingLine: String,
+    @SerializedName("selection_scores") val selectionScores: List<SituationScore>? = null
 )
 
 // ─── 3. POST /conversation ──────────────────────────────────────────
@@ -56,7 +72,15 @@ data class RepairDetail(
 data class ConversationResponse(
     @SerializedName("reply") val reply: String,
     @SerializedName("repair_triggered") val repairTriggered: Boolean,
-    @SerializedName("repair") val repair: RepairDetail?
+    @SerializedName("repair") val repair: RepairDetail?,
+    // Additive fields, not part of the frozen contract - surfaces automatic
+    // pace adjustment (backend/app/models.py's ConversationResponse). Same
+    // defaults as the backend's own Pydantic model, so a response that
+    // omits them (or an older cached mock payload) still deserializes
+    // correctly instead of failing.
+    @SerializedName("pace_changed") val paceChanged: Boolean = false,
+    @SerializedName("pace_change_reason") val paceChangeReason: String? = null,
+    @SerializedName("pace_preference") val pacePreference: Double? = null
 )
 
 // ─── 4. GET /readiness ──────────────────────────────────────────────
