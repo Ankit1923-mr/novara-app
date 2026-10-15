@@ -63,8 +63,30 @@ object NovaraNetworkClient {
         level = HttpLoggingInterceptor.Level.BODY
     }
 
+    private val resilientDns = object : okhttp3.Dns {
+        override fun lookup(hostname: String): List<java.net.InetAddress> {
+            return try {
+                okhttp3.Dns.SYSTEM.lookup(hostname)
+            } catch (e: java.net.UnknownHostException) {
+                if (hostname.contains("novara-api-dnhc.onrender.com")) {
+                    try {
+                        java.net.InetAddress.getAllByName(hostname).toList()
+                    } catch (_: Exception) {
+                        listOf(
+                            java.net.InetAddress.getByAddress(hostname, byteArrayOf(216.toByte(), 24.toByte(), 57.toByte(), 18.toByte())),
+                            java.net.InetAddress.getByAddress(hostname, byteArrayOf(216.toByte(), 24.toByte(), 57.toByte(), 16.toByte()))
+                        )
+                    }
+                } else {
+                    throw e
+                }
+            }
+        }
+    }
+
     // Free tier on Render can take 30-50s to cold-start; give 60s timeout
     private val okHttpClient = OkHttpClient.Builder()
+        .dns(resilientDns)
         .addInterceptor(authInterceptor)
         .addInterceptor(loggingInterceptor)
         .connectTimeout(60, TimeUnit.SECONDS)
