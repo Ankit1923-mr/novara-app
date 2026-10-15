@@ -1,46 +1,28 @@
-# NOVARA
+# NOVARA Android Application
 
-Personalized language & country-immersion learning app. B.Tech final year project.
+Native Android client for NOVARA — Personalized Language & Country-Immersion Learning App.
 
-## Overview
+## Architecture & Tech Stack
 
-NOVARA is an AI-powered, adaptive Spanish language immersion and conversational practice platform built natively for Android using **Jetpack Compose (Material 3)**, **Kotlin Coroutines & Flow**, **Retrofit with Kotlinx Serialization**, and **Android Jetpack DataStore**.
-
----
-
-## Repository Structure
-
-- **`/app`** — Native Android (Kotlin/Jetpack Compose) Application
-  - **Intake & Profile Setup**: Learner identity, CEFR proficiency levels (`A1`, `A2`, `B1`, `B2`), region selection (e.g. Madrid, Mexico City), MVP learning purpose (`trip`, `casual`), topics of interest, and target weak areas.
-  - **Adaptive Scenarios**: Real-life situational immersion generated dynamically by the backend Personalization Engine based on learner goals and selection scores.
-  - **AI Conversation Partner**: Real-time turn-by-turn Spanish dialogue with automatic AI pace adjustments and inline repair feedback cards.
-  - **Spanish Learning Hub & Topics**: Interactive vocabulary flashcards with cultural tips and knowledge-check mini-quizzes.
-  - **Readiness Competency Dashboard**: Real-time visualization of aggregate readiness and breakdown scores across language accuracy, repair success rate, register appropriateness, and transfer success.
-  - **Standalone Repair Lab**: Interactive tool for sentence pattern analysis and grammar/lexical repair strategy experimentation.
-  - **Local Persistence & DataStore**: Multi-profile management, offline fallback caching, session persistence, and dynamic `X-API-Key` & JWT Bearer token authentication.
-- **`/docs`** — API contract, architectural specs, and documentation.
+- **UI Framework**: Jetpack Compose with Material 3 Design System
+- **Asynchronous Architecture**: Kotlin Coroutines & `StateFlow`
+- **Networking & Serialization**: Retrofit 2 + OkHttp 4 + `kotlinx.serialization`
+- **Local Persistence**: Android Jetpack DataStore Preferences
+- **Target SDK**: Android 15 (SDK 35) / Min SDK 24 (Android 7.0+)
 
 ---
 
-## MVP Scope
+## App Features & Modules
 
-- **Language**: Spanish
-- **Learner Purposes**: `trip` (Hotels, dining, transport) and `casual` (Smalltalk, culture, hobbies)
-- **CEFR Levels**: `A1`, `A2`, `B1`, `B2`
-
----
-
-## Completed Android Features
-
-1. **Intake & Multi-Profile Management (`ProfileScreen`, `ProfileViewModel`)**:
-   - Interactive profile creation with identity generation, region selector, CEFR level chips, learning purpose selector (`trip`/`casual`), interests, and focus weak areas.
-   - Dual-header authentication integration (`X-API-Key` and JWT Bearer token via `/auth/signup` and `/auth/login`).
+1. **Intake & Profile Setup (`ProfileScreen`, `ProfileViewModel`)**:
+   - Identity generation (`learner_id`), CEFR level selection (`A1`, `A2`, `B1`, `B2`), region configuration, learning purpose (`trip`, `casual`), topics of interest, and target weak areas.
+   - Dynamic API key (`fXTFEdbxbsOE9fuU8E-xbYiwOEyRzgZBzJcwA_DaJ9c`) & JWT Bearer token authentication.
    - Profile switcher dialog supporting profile creation, switching, and removal stored locally in DataStore.
 
 2. **Adaptive Situational Scenarios (`ScenarioScreen`, `ScenarioViewModel`)**:
    - Fetches personalized scenarios from `GET /scenario?learner_id={id}`.
    - Displays setting details, situation tags, adaptive selection scores, interest/weak area overlaps, and opening line.
-   - Instant launch into live AI conversation partner.
+   - Direct launch into live AI conversation partner.
 
 3. **AI Conversation Partner & Real-Time Repair (`ChatScreen`, `ChatViewModel`)**:
    - Turn-by-turn Spanish conversation UI with message start/end timing measurement (`response_time_ms`).
@@ -58,25 +40,25 @@ NOVARA is an AI-powered, adaptive Spanish language immersion and conversational 
 6. **Standalone Repair Practice Lab (`RepairPracticeScreen`, `RepairViewModel`)**:
    - Interactive testbed connecting to `POST /repair` for testing custom learner utterances against expected patterns.
 
-7. **Networking & Authentication Architecture**:
-   - Implemented `ApiHeaderInterceptor` for automatically attaching `X-API-Key` (`fXTFEdbxbsOE9fuU8E-xbYiwOEyRzgZBzJcwA_DaJ9c`) and JWT Bearer token headers.
-   - Full offline fallback caching and robust error handling for cold starts and network glitches.
-
 ---
 
-## Live Deployed Backend
+## API Interceptor & Call Sequence
 
-- **Base URL**: `https://novara-api-dnhc.onrender.com`
-- **Header**: `X-API-Key: fXTFEdbxbsOE9fuU8E-xbYiwOEyRzgZBzJcwA_DaJ9c`
+The app implements `ApiHeaderInterceptor` to automatically attach required headers:
+```
+X-API-Key: fXTFEdbxbsOE9fuU8E-xbYiwOEyRzgZBzJcwA_DaJ9c
+Authorization: Bearer <token>
+```
+
+**Backend Call Order**:
 ```
 /auth/login or /auth/signup  -->  /profile  -->  /scenario  -->  /conversation  -->  /readiness
 ```
 
 ---
 
-## How to Run the Android App
+## How to Build & Run
 
-1. Open the project root in **Android Studio**.
-2. Ensure Android SDK 35 is installed.
-3. Sync Gradle and build the project (`./gradlew assembleDebug`).
-4. Run on an Android Emulator or connected device (Android 7.0 / API 24+).
+1. Open `/android` in Android Studio (Ladybug 2024.2.1+).
+2. Sync Gradle.
+3. Run `./gradlew assembleDebug` or launch on emulator / physical device.
