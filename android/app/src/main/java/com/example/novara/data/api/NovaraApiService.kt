@@ -1,6 +1,7 @@
 package com.example.novara.data.api
 
 import com.example.novara.data.model.AuthResponse
+import com.example.novara.data.model.ConversationHistoryResponse
 import com.example.novara.data.model.ConversationRequest
 import com.example.novara.data.model.ConversationResponse
 import com.example.novara.data.model.LearnerState
@@ -23,6 +24,9 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface NovaraApiService {
+
+    @GET("/")
+    suspend fun getHealth(): Map<String, String>
 
     @POST("auth/signup")
     suspend fun signup(
@@ -48,6 +52,12 @@ interface NovaraApiService {
     suspend fun sendConversation(
         @Body request: ConversationRequest
     ): ConversationResponse
+
+    @GET("conversation/history")
+    suspend fun getConversationHistory(
+        @Query("learner_id") learnerId: String,
+        @Query("scenario_id") scenarioId: String
+    ): ConversationHistoryResponse
 
     @POST("repair")
     suspend fun submitRepair(

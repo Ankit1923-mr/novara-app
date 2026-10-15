@@ -56,7 +56,39 @@ class ChatViewModel(
                 messages = initialMessages
             )
 
+            // Try fetching conversation history from backend if available
+            val historyResult = repository.getConversationHistory(activeId, activeScenarioId)
+            historyResult.onSuccess { history ->
+                if (history.turns.isNotEmpty()) {
+                    val loadedMessages = history.turns.map { turn ->
+                        ChatMessage(
+                            sender = if (turn.sender.lowercase() == "user" || turn.sender.lowercase() == "learner") Sender.LEARNER else Sender.AI,
+                            text = turn.message,
+                            turnNumber = turn.turnNumber,
+                            timestamp = turn.timestamp
+                        )
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        turnNumber = (history.turns.maxOfOrNull { it.turnNumber } ?: 1) + 1,
+                        messages = loadedMessages
+                    )
+                }
+            }
+
             messageStartTimeMs = System.currentTimeMillis()
+        }
+    }
+
+    fun updatePacePreference(pacePreference: Float) {
+        viewModelScope.launch {
+            val activeId = _uiState.value.learnerId
+            if (activeId.isNotBlank()) {
+                repository.setPacePreference(activeId, pacePreference)
+                _uiState.value = _uiState.value.copy(
+                    currentPacePreference = pacePreference,
+                    lastPaceChangeReason = "Manual pace set to ${(pacePreference * 100).toInt()}%"
+                )
+            }
         }
     }
 

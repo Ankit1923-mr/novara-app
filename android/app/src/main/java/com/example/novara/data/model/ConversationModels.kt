@@ -23,6 +23,21 @@ data class ConversationResponse(
 )
 
 @Serializable
+data class ConversationTurn(
+    @SerialName("turn_number") val turnNumber: Int,
+    val sender: String,
+    val message: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class ConversationHistoryResponse(
+    @SerialName("learner_id") val learnerId: String,
+    @SerialName("scenario_id") val scenarioId: String,
+    val turns: List<ConversationTurn> = emptyList()
+)
+
+@Serializable
 data class RepairDetails(
     @SerialName("error_type") val errorType: String, // "lexical" | "grammar" | "register" | "comprehension"
     val strategy: String, // "clarify" | "rephrase" | "hint"

@@ -3,6 +3,7 @@ package com.example.novara.data.repository
 import com.example.novara.data.api.NovaraApiService
 import com.example.novara.data.api.RetrofitClient
 import com.example.novara.data.model.AuthResponse
+import com.example.novara.data.model.ConversationHistoryResponse
 import com.example.novara.data.model.ConversationRequest
 import com.example.novara.data.model.ConversationResponse
 import com.example.novara.data.model.LearnerState
@@ -24,6 +25,11 @@ import kotlinx.coroutines.withContext
 class NovaraRepository(
     private val apiService: NovaraApiService = RetrofitClient.apiService
 ) {
+
+    suspend fun getHealth(): Result<Map<String, String>> =
+        withContext(Dispatchers.IO) {
+            runCatching { apiService.getHealth() }
+        }
 
     suspend fun signup(request: SignupRequest): Result<AuthResponse> =
         withContext(Dispatchers.IO) {
@@ -48,6 +54,11 @@ class NovaraRepository(
     suspend fun sendConversation(request: ConversationRequest): Result<ConversationResponse> =
         withContext(Dispatchers.IO) {
             runCatching { apiService.sendConversation(request) }
+        }
+
+    suspend fun getConversationHistory(learnerId: String, scenarioId: String): Result<ConversationHistoryResponse> =
+        withContext(Dispatchers.IO) {
+            runCatching { apiService.getConversationHistory(learnerId, scenarioId) }
         }
 
     suspend fun submitRepair(request: RepairRequest): Result<RepairDetails> =
