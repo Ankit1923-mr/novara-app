@@ -15,6 +15,12 @@ import java.util.concurrent.TimeUnit
 
 interface NovaraApiService {
 
+    @POST("/auth/signup")
+    suspend fun signup(@Body request: SignupRequest): Response<AuthResponse>
+
+    @POST("/auth/login")
+    suspend fun login(@Body request: LoginRequest): Response<AuthResponse>
+
     @POST("/profile")
     suspend fun createProfile(@Body profile: LearnerProfile): Response<ProfileResponse>
 
@@ -35,14 +41,22 @@ object NovaraNetworkClient {
     private const val BASE_URL = "https://novara-api-dnhc.onrender.com"
     private const val API_KEY = "fXTFEdbxbsOE9fuU8E-xbYiwOEyRzgZBzJcwA_DaJ9c"
 
+    // Set by MainActivity from TokenStore at startup and after every
+    // successful login/signup/logout. Attached as a bearer token
+    // alongside (never instead of) the existing X-API-Key header -
+    // the shared key alone is never sufficient proof of learner
+    // identity for any endpoint the backend now enforces ownership on.
+    @Volatile
+    var bearerToken: String? = null
+
     private val authInterceptor = Interceptor { chain ->
         val original = chain.request()
-        val request = original.newBuilder()
+        val builder = original.newBuilder()
             .header("X-API-Key", API_KEY)
             .header("Content-Type", "application/json")
             .method(original.method, original.body)
-            .build()
-        chain.proceed(request)
+        bearerToken?.let { builder.header("Authorization", "Bearer $it") }
+        chain.proceed(builder.build())
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {

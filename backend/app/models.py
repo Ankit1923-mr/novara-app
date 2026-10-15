@@ -10,6 +10,12 @@ Strategy = Literal["clarify", "rephrase", "hint"]
 # limit lives in one place instead of being a bare number wherever it's used.
 MAX_ID_LENGTH = 100          # learner_id / scenario_id
 MAX_SHORT_TEXT_LENGTH = 200  # region, single utterances used for matching
+
+
+class VocabItem(BaseModel):
+    phrase: str
+    meaning: str
+    cultural_note: str
 MAX_MESSAGE_LENGTH = 1000    # a conversation turn or repair sample — generous for a sentence, not a paste
 MAX_LIST_ITEMS = 20          # interests / weak_areas — no real learner needs more than this
 
@@ -51,6 +57,14 @@ class ScenarioResponse(BaseModel):
     # exposes the Adaptive Engine's scoring so the frontend can show *why*
     # this scenario was picked over the alternatives.
     selection_scores: list[SituationScore] = []
+    # Additive field - the actual teaching material for this scenario:
+    # every Knowledge Graph phrase matching the chosen situation, with its
+    # existing meaning/culture_note (reused, not invented - same traceable
+    # content the lesson/topics system already serves via VocabItem).
+    # Previously only opening_line (one raw Spanish sentence, no
+    # translation or context) was exposed - a learner had nothing to
+    # study before being dropped into the role-play.
+    vocabulary: list[VocabItem] = []
 
 
 class ConversationRequest(BaseModel):
@@ -79,6 +93,17 @@ class ConversationResponse(BaseModel):
     pace_preference: Optional[float] = None
 
 
+class ConversationTurn(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class ConversationHistoryResponse(BaseModel):
+    learner_id: str
+    scenario_id: str
+    turns: list[ConversationTurn]
+
+
 class RepairRequest(BaseModel):
     learner_utterance: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
     expected_pattern: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
@@ -90,6 +115,11 @@ class ReadinessResponse(BaseModel):
     breakdown: dict[str, float]
     purpose: Purpose
     weights_used: dict[str, float]
+    # Additive field - a short, actionable review: which of the 4
+    # dimensions is weakest for this learner right now, in plain
+    # language, reusing only the existing breakdown/weights data (no
+    # new scoring, no invented claim about real-world transfer).
+    next_step: str
 
 
 class LearnerState(BaseModel):
@@ -134,11 +164,6 @@ class AuthResponse(BaseModel):
 
 
 # --- Lessons and quizzes ---
-class VocabItem(BaseModel):
-    phrase: str
-    meaning: str
-    cultural_note: str
-
 
 class QuizQuestion(BaseModel):
     question: str

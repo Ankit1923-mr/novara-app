@@ -6,6 +6,26 @@ import com.google.gson.annotations.SerializedName
  * NOVARA Data Models strictly matching `docs/api-contract.md`.
  */
 
+// ─── 0. POST /auth/signup, /auth/login ───────────────────────────────
+// Not part of the frozen 5-endpoint contract. Mirrors
+// backend/app/models.py's SignupRequest/LoginRequest/AuthResponse.
+data class SignupRequest(
+    @SerializedName("email") val email: String,
+    @SerializedName("password") val password: String
+)
+
+data class LoginRequest(
+    @SerializedName("email") val email: String,
+    @SerializedName("password") val password: String
+)
+
+data class AuthResponse(
+    @SerializedName("token") val token: String,
+    @SerializedName("email") val email: String,
+    @SerializedName("learner_id") val learnerId: String,
+    @SerializedName("has_profile") val hasProfile: Boolean
+)
+
 // ─── 1. POST /profile ───────────────────────────────────────────────
 data class LearnerProfile(
     @SerializedName("learner_id") val learnerId: String,

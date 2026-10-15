@@ -8,6 +8,8 @@ Scope: Spanish, Trip + Casual purposes only. Backend is fully implemented, deplo
 
 *No changes since freeze.*
 
+**BREAKING CHANGE — 2026-10-14, authentication requirement added.** Every endpoint that reads or writes learner-specific data (`/profile`, `/scenario`, `/conversation`, `/readiness`, `/me`, `/topics`, `/topics/{topic_id}/submit`, `/profile/pace`, `/conversation/history`) now requires, **in addition to** the existing `X-API-Key` header, an `Authorization: Bearer <jwt>` header whose token's email matches the request's `learner_id`. This was not true before this date — those endpoints previously accepted any `learner_id` with just the shared API key. See "Authentication" below. The new `/conversation/history` endpoint is documented below. Total test count including Phase 1's changes: 178, all passing.
+
 ---
 
 ## 1. POST /profile
@@ -58,6 +60,8 @@ Returns the next situational scenario for this learner.
 
 Also present, added after the freeze (additive, same backward-compatible status as `response_time_ms` below): `"selection_scores"` — an array of per-candidate-situation score breakdowns from the Adaptive Engine (`situation_tag`, `interest_overlap`, `weak_area_overlap`, `novelty_bonus`, `score`). Omit it in client code that doesn't need it; it will still be present in every real response.
 
+Also additive: `"vocabulary"` — every Knowledge Graph phrase matching the chosen situation, each as `{"phrase": "...", "meaning": "...", "cultural_note": "..."}` (same shape as the existing `VocabItem` used by `/topics/{topic_id}`). This is the actual teaching material for the scenario — translations and cultural context for the phrases the learner will need, not just the single `opening_line`. Reused Knowledge Graph content only; nothing in it is AI-generated at request time.
+
 ---
 
 ## 3. POST /conversation
@@ -99,6 +103,29 @@ Send a learner message, get the AI partner's reply + repair flag if triggered.
 ```
 
 Also present on every response, added after the freeze (additive, same backward-compatible status as `response_time_ms` above): `"pace_changed"` (bool), `"pace_change_reason"` (string or null), `"pace_preference"` (number or null) — surfaces automatic pace adjustment so a client can show when and why pace moved, instead of only picking it up on the next `/me` poll.
+
+---
+
+## 3a. GET /conversation/history
+
+Additive, not part of the frozen 5 — returns a learner's prior turns for one scenario (ordered oldest-first), backed by real persistence (survives a backend restart; previously nothing was persisted here at all).
+
+**Request**: `GET /conversation/history?learner_id={id}&scenario_id={id}`
+
+**Response — 200**
+```json
+{
+  "learner_id": "string",
+  "scenario_id": "string",
+  "turns": [
+    {"role": "assistant", "content": "Hola, ¿qué le pongo?"},
+    {"role": "user", "content": "Quiero un café."},
+    {"role": "assistant", "content": "¿Para aquí o para llevar?"}
+  ]
+}
+```
+
+Requires authentication (see below) — `learner_id` must match the bearer token's email. Returns 404 if `learner_id` has no profile yet; returns an empty `turns` list (not 404) if the learner/scenario pair exists but has no conversation yet.
 
 ---
 
@@ -144,9 +171,12 @@ Also present on every response, added after the freeze (additive, same backward-
     "repair_success_rate": 0.3,
     "register_appropriateness": 0.2,
     "transfer_success": 0.2
-  }
+  },
+  "next_step": "Slow down and re-read the AI partner's replies carefully - several recent turns needed a correction."
 }
 ```
+
+Also present (additive): `"next_step"` — a short, actionable recommendation naming the learner's weakest breakdown dimension in plain language (e.g. the example above points at `repair_success_rate`, the lowest score). With zero turns so far, it instead reads "Start a conversation to get your first readiness reading...". Reuses only the existing breakdown/weights data — no new scoring, no invented claim about real-world transfer.
 
 ---
 
@@ -184,6 +214,21 @@ Practical takeaway for Android: check the HTTP status code first, then read `det
 ## Authentication
 
 Every endpoint except `GET /` requires an `X-API-Key` header matching the shared key (distributed separately, never committed — see backend/.env). A missing or wrong key returns 401.
+
+**Added 2026-10-14 — per-learner ownership.** Possession of the shared API key is app-level only; it is never sufficient proof of *which learner* a request is for. Every endpoint that reads or writes learner-specific data additionally requires:
+
+```
+Authorization: Bearer <jwt>
+```
+
+obtained from `POST /auth/signup` or `POST /auth/login` (`token` field in the response). The token's email must equal the request's `learner_id` (query param or body field, depending on the endpoint) — this is the same convention `has_profile`/`learner_id` in `AuthResponse` already documents (`learner_id == email`).
+
+- Missing or malformed `Authorization` header, or an expired/invalid token → `401` (`{"detail": "Missing bearer token"}` or `{"detail": "Invalid or expired session token"}`).
+- Valid token, but its email doesn't match the request's `learner_id` → `403` (`{"detail": "Not authorized for this learner_id"}`). This is the **same response** whether that `learner_id` belongs to someone else or doesn't exist at all — the error deliberately never discloses which.
+- Endpoints requiring this: `/profile`, `/scenario`, `/conversation`, `/readiness`, `/me`, `/topics`, `/topics/{topic_id}/submit`, `/profile/pace`, `/conversation/history`.
+- Endpoints NOT requiring this (no learner-specific data): `GET /`, `POST /auth/signup`, `POST /auth/login`, `POST /repair`, `GET /topics/{topic_id}`.
+
+**Client impact**: Android and the web frontends must obtain and attach a bearer token for every one of the endpoints listed above — a request with only a valid `X-API-Key` and no bearer token (or a mismatched one) now fails where it previously succeeded. There is no shared-key bypass for this check.
 
 ## Rate limits
 

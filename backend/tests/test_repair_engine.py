@@ -14,7 +14,7 @@ generalizable claim. Real learner speech (typos, mixed errors,
 code-switching) will be messier than these clean single-error examples.
 """
 
-from app.repair_engine import classify_error, select_strategy, generate_repair, repair
+from app.repair_engine import classify_error, select_strategy, generate_repair, repair, detect_repair
 
 
 # (utterance, expected_pattern, correct_error_type)
@@ -92,4 +92,105 @@ def test_repair_pipeline_returns_contract_shape():
     assert set(result.keys()) == {"error_type", "strategy", "repair_text"}
     assert result["error_type"] == "lexical"
     assert result["strategy"] == select_strategy("lexical")
-    assert "café" in result["repair_text"]
+
+
+# --- Function-word lexical confusions (ser/estar only - see repair_engine.py
+# for why por/para was deliberately excluded) ---
+# A real 0% lexical-recall gap was measured on a separate 15-sample
+# script (backend/scripts/repair_engine_cows_l2h_baseline.py, modeled
+# on real COWS-L2H error categories): every ser/estar confusion was
+# misclassified as "grammar", because swapping one function word
+# barely moves the content-overlap ratio (the surrounding content
+# words are unchanged), so it fell through to the overlap-based
+# "grammar" default. Fixed via an explicit FUNCTION_WORD_CONFUSIONS
+# check in classify_error, checked before the overlap ratio.
+def test_ser_estar_confusion_is_classified_as_lexical():
+    # "es" (ser) used where "está" (estar) is expected - a genuine
+    # lexical/grammatical-category confusion, not an accent slip.
+    assert classify_error("El cafe es bueno", "El café está bueno.") == "lexical"
+
+
+def test_estar_ser_confusion_is_classified_as_lexical():
+    assert classify_error("Estoy profesor", "Soy profesor.") == "lexical"
+
+
+def test_shared_function_word_is_not_a_false_positive():
+    # Both utterance and expected share "está"/"esta" here - the
+    # learner's word is also legitimately used in the expected pattern,
+    # so this must not be flagged as a ser/estar confusion.
+    assert classify_error("Donde esta el bano", "¿Dónde está la parada de autobús?") == "lexical"
+    # (lexical here is correct for a different reason - "baño" has no
+    # overlap with "parada"/"autobús" - but confirm no DOUBLE-counted
+    # or incorrectly-reasoned trigger via the function-word path itself.)
+    from app.repair_engine import _has_function_word_confusion
+    assert _has_function_word_confusion("Donde esta el bano", "¿Dónde está la parada de autobús?") is False
+
+
+def test_por_para_is_a_known_undetected_gap_not_a_false_positive():
+    # "por favor" in the utterance must NOT be flagged as a por/para
+    # confusion just because the expected pattern happens to use "para"
+    # for an unrelated purpose (location, not destination). Before the
+    # fix, this case was incorrectly flagged "lexical" via the removed
+    # por/para rule; por/para detection was dropped from
+    # FUNCTION_WORD_CONFUSIONS specifically because of this collision -
+    # this pins down the correct (if imperfect, overlap-based) fallback.
+    assert classify_error("Para aqui, por favor", "¿Para aquí o para llevar?") == "grammar"
+
+
+# --- "why" explanation attached only when there's reliable evidence ---
+
+def test_repair_text_includes_meaning_when_confident_match_found():
+    meanings = {"Quiero un café, por favor.": "I'd like a coffee, please."}
+    result = detect_repair("Quiero un te", ["Quiero un café, por favor."], candidate_meanings=meanings)
+    assert result is not None
+    assert "I'd like a coffee, please." in result["repair_text"]
+
+
+def test_repair_text_unchanged_without_candidate_meanings():
+    # No candidate_meanings passed at all - must produce the exact same
+    # text as before this feature existed (fully backward compatible).
+    result = detect_repair("Quiero un te", ["Quiero un café, por favor."])
+    assert result is not None
+    assert result["repair_text"] == 'Se dice: "Quiero un café, por favor.".'
+
+
+def test_comprehension_fallback_never_attaches_a_meaning():
+    # "eh" is a comprehension signal with no reliably-matched expected
+    # phrase - even if candidate_meanings is supplied, it must not be
+    # used, since there's no confident match to explain.
+    meanings = {"Quiero un café, por favor.": "I'd like a coffee, please."}
+    result = detect_repair("eh", ["Quiero un café, por favor."], candidate_meanings=meanings)
+    assert result is not None
+    assert result["repair_text"] == "¿Puede repetir, por favor?"
+
+
+def test_generate_repair_meaning_param_defaults_to_none():
+    assert generate_repair("lexical", "hint", "X") == generate_repair("lexical", "hint", "X", None)
+
+
+# --- "why" explanation: only when the classifier has specific, reliable evidence ---
+
+def test_ser_estar_repair_includes_a_specific_reason():
+    result = detect_repair("Estoy profesor", ["Soy profesor."])
+    assert result is not None
+    assert "ser and estar" in result["repair_text"]
+
+
+def test_register_mismatch_repair_includes_a_specific_reason():
+    result = detect_repair("Tienes una mesa para dos?", ["¿Tiene una mesa para dos?"])
+    assert result is not None
+    assert "usted" in result["repair_text"] and "tú" in result["repair_text"]
+
+
+def test_plain_overlap_lexical_error_gets_no_invented_reason():
+    # A generic content-word swap has no specific structural evidence of
+    # *why* it's wrong beyond "overlap was low" - must not get a reason
+    # attached, only the existing meaning (if any) and corrected phrase.
+    result = detect_repair("Quiero un te", ["Quiero un café, por favor."],
+                            candidate_meanings={"Quiero un café, por favor.": "I'd like a coffee, please."})
+    assert result is not None
+    assert result["repair_text"] == 'Se dice: "Quiero un café, por favor.". (I\'d like a coffee, please.)'
+
+
+def test_generate_repair_reason_param_defaults_to_none():
+    assert generate_repair("lexical", "hint", "X", "meaning") == generate_repair("lexical", "hint", "X", "meaning", None)

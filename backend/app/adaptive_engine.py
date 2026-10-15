@@ -51,14 +51,32 @@ SCENARIO_META: dict[str, dict] = {
 }
 
 
+# Below this confidence_score, a learner is struggling more than usual
+# (recent turns have needed more repair than not - confidence_score is
+# the Personalization Engine's EMA of repair-free turns). Previously
+# confidence_score was computed, persisted, and returned via /me and
+# /profile but never read by anything else - this is the first
+# consumer: double-weight weak_area overlap so a struggling learner's
+# next scenario is pulled harder toward their stated weak areas,
+# instead of the same interest/novelty mix as a confident learner.
+LOW_CONFIDENCE_THRESHOLD = 0.4
+WEAK_AREA_WEIGHT_WHEN_LOW_CONFIDENCE = 2
+
+
 def score_all_situations(purpose: str, interests: Optional[list[str]] = None,
                           weak_areas: Optional[list[str]] = None,
-                          recently_seen: Optional[list[str]] = None) -> list[dict]:
+                          recently_seen: Optional[list[str]] = None,
+                          confidence_score: Optional[float] = None) -> list[dict]:
     """Score every candidate situation tag for this learner — exposed so the
     frontend can show *why* a scenario was chosen, not just the result."""
     interests = interests or []
     weak_areas = weak_areas or []
     recently_seen = recently_seen or []
+    weak_area_weight = (
+        WEAK_AREA_WEIGHT_WHEN_LOW_CONFIDENCE
+        if confidence_score is not None and confidence_score < LOW_CONFIDENCE_THRESHOLD
+        else 1
+    )
 
     situations = list_situations(purpose)
     breakdown = []
@@ -77,7 +95,7 @@ def score_all_situations(purpose: str, interests: Optional[list[str]] = None,
             "interest_overlap": interest_overlap,
             "weak_area_overlap": weak_area_overlap,
             "novelty_bonus": 1 if novel else 0,
-            "score": len(interest_overlap) + len(weak_area_overlap) + (1 if novel else 0),
+            "score": len(interest_overlap) + weak_area_weight * len(weak_area_overlap) + (1 if novel else 0),
         })
 
     breakdown.sort(key=lambda b: b["score"], reverse=True)
@@ -86,13 +104,14 @@ def score_all_situations(purpose: str, interests: Optional[list[str]] = None,
 
 def choose_situation(purpose: str, interests: Optional[list[str]] = None,
                       weak_areas: Optional[list[str]] = None,
-                      recently_seen: Optional[list[str]] = None) -> str:
+                      recently_seen: Optional[list[str]] = None,
+                      confidence_score: Optional[float] = None) -> str:
     """Return the highest-scoring situation tag for this learner."""
     situations = list_situations(purpose)
     if not situations:
         raise ValueError(f"no situations available for purpose={purpose!r}")
 
-    breakdown = score_all_situations(purpose, interests, weak_areas, recently_seen)
+    breakdown = score_all_situations(purpose, interests, weak_areas, recently_seen, confidence_score)
     # breakdown is sorted by score desc but ties should break by first
     # occurrence in list_situations, same as the original loop-based version.
     best_score = breakdown[0]["score"]
@@ -105,10 +124,11 @@ def choose_situation(purpose: str, interests: Optional[list[str]] = None,
 
 def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]] = None,
                     weak_areas: Optional[list[str]] = None,
-                    recently_seen: Optional[list[str]] = None) -> dict:
+                    recently_seen: Optional[list[str]] = None,
+                    confidence_score: Optional[float] = None) -> dict:
     """Full scenario object matching the /scenario contract shape."""
-    selection_scores = score_all_situations(purpose, interests, weak_areas, recently_seen)
-    tag = choose_situation(purpose, interests, weak_areas, recently_seen)
+    selection_scores = score_all_situations(purpose, interests, weak_areas, recently_seen, confidence_score)
+    tag = choose_situation(purpose, interests, weak_areas, recently_seen, confidence_score)
     nodes: list[Node] = get_subgraph(purpose, situation_tag=tag)
     meta = SCENARIO_META.get(tag, {"title": tag.title(), "setting": "Spain"})
     opening_line = nodes[0]["phrase"] if nodes else "Hola."
@@ -125,6 +145,15 @@ def build_scenario(learner_id: str, purpose: str, interests: Optional[list[str]]
         "situation_tags": sorted({t for n in nodes for t in n["situation_tags"]}),
         "opening_line": opening_line,
         "selection_scores": selection_scores,
+        # The actual teaching material for this scenario - every graph
+        # phrase matching the chosen situation, with its existing
+        # meaning/culture_note (reused Knowledge Graph content, not
+        # invented). Previously a learner only saw opening_line (one raw
+        # Spanish sentence with no translation or cultural context).
+        "vocabulary": [
+            {"phrase": n["phrase"], "meaning": n["meaning"], "cultural_note": n["culture_note"]}
+            for n in nodes
+        ],
         # The single situation this scenario was built around - what
         # recently_seen should track, as opposed to situation_tags above
         # (every tag on every matching phrase, which over-fills the recency

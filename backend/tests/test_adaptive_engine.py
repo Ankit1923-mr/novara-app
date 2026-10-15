@@ -72,3 +72,60 @@ def test_build_scenario_deterministic_for_same_input():
     s1 = build_scenario("u1", "casual", interests=["hobbies"], weak_areas=[], recently_seen=[])
     s2 = build_scenario("u1", "casual", interests=["hobbies"], weak_areas=[], recently_seen=[])
     assert s1 == s2
+
+
+# --- confidence_score -> weak-area weighting (Personalization Engine's
+# previously-dead confidence_score now has a real, direct consumer) ---
+
+def test_low_confidence_doubles_weak_area_overlap_score():
+    from app.adaptive_engine import score_all_situations
+    # recently_seen=["repair"] zeroes out novelty_bonus for that tag, so
+    # the only thing that can change the score is the weak-area weight.
+    normal = score_all_situations("trip", weak_areas=["repair"], recently_seen=["repair"])
+    low_confidence = score_all_situations(
+        "trip", weak_areas=["repair"], recently_seen=["repair"], confidence_score=0.2
+    )
+    normal_repair = next(b for b in normal if b["situation_tag"] == "repair")
+    low_repair = next(b for b in low_confidence if b["situation_tag"] == "repair")
+    assert normal_repair["score"] == 1
+    assert low_repair["score"] == 2
+    assert low_repair["weak_area_overlap"] == normal_repair["weak_area_overlap"]
+
+
+def test_high_confidence_does_not_change_scoring():
+    from app.adaptive_engine import score_all_situations
+    normal = score_all_situations("trip", weak_areas=["repair"], recently_seen=["repair"])
+    high_confidence = score_all_situations(
+        "trip", weak_areas=["repair"], recently_seen=["repair"], confidence_score=0.9
+    )
+    assert normal == high_confidence
+
+
+def test_missing_confidence_score_preserves_original_behavior():
+    from app.adaptive_engine import build_scenario
+    # No confidence_score passed at all - must behave exactly as before
+    # this change (default parameter, fully backward compatible).
+    scenario = build_scenario("u1", "trip", interests=["food"], weak_areas=[], recently_seen=[])
+    assert scenario["purpose"] == "trip"
+    assert len(scenario["opening_line"]) > 0
+
+
+# --- vocabulary: actual teaching material, not just a role-play prompt ---
+
+def test_scenario_includes_vocabulary_with_meanings_and_culture_notes():
+    from app.adaptive_engine import build_scenario
+    scenario = build_scenario("u1", "trip", interests=["food"], weak_areas=[], recently_seen=[])
+    assert len(scenario["vocabulary"]) > 0
+    for item in scenario["vocabulary"]:
+        assert item["phrase"]
+        assert item["meaning"]
+        assert item["cultural_note"]
+
+
+def test_vocabulary_matches_the_chosen_situation_not_the_whole_purpose():
+    from app.adaptive_engine import build_scenario
+    from app.knowledge_graph import get_subgraph
+    scenario = build_scenario("u1", "trip", interests=["food"], weak_areas=[], recently_seen=[])
+    expected_phrases = {n["phrase"] for n in get_subgraph("trip", situation_tag=scenario["chosen_situation"])}
+    actual_phrases = {v["phrase"] for v in scenario["vocabulary"]}
+    assert actual_phrases == expected_phrases

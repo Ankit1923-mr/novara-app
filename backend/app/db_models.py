@@ -3,7 +3,7 @@ SQLAlchemy ORM models — the persistent shape of what used to live in
 main.py's in-memory LEARNERS/SCENARIOS dicts.
 """
 
-from sqlalchemy import Column, String, Float, Integer, JSON, DateTime, Boolean
+from sqlalchemy import Column, String, Float, Integer, JSON, DateTime, Boolean, Index
 from app.db import Base
 
 
@@ -93,3 +93,34 @@ class ScenarioModel(Base):
     setting = Column(String, nullable=False)
     situation_tags = Column(JSON, default=list)
     opening_line = Column(String, nullable=False)
+    # The single situation tag this scenario was actually built around
+    # (build_scenario's "chosen_situation") - distinct from situation_tags
+    # above, which is the union of every tag across all matching nodes.
+    # Needed so /conversation can look up the SAME node set /scenario
+    # used, instead of re-querying get_subgraph per tag in situation_tags
+    # (which can pull in unrelated nodes from other situations that
+    # happen to share one tag, e.g. "ordering"). Nullable for scenario
+    # rows created before this column existed.
+    chosen_situation = Column(String, nullable=True)
+
+
+class ConversationTurnModel(Base):
+    """A single message in a learner's conversation for one scenario.
+    Replaces conversation_engine.py's old module-level in-memory HISTORY
+    dict, which lost every conversation on process restart/redeploy and
+    exposed no history to any client. Ordered by `id` (autoincrement
+    insertion order) - not by created_at, which can collide at
+    sub-millisecond resolution between two turns committed in the same
+    transaction, making it an unreliable sort key on its own."""
+    __tablename__ = "conversation_turns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    learner_id = Column(String, nullable=False)
+    scenario_id = Column(String, nullable=False)
+    role = Column(String, nullable=False)  # "user" | "assistant"
+    content = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_conversation_turns_learner_scenario", "learner_id", "scenario_id"),
+    )

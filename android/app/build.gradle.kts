@@ -76,6 +76,11 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
+    // Secure local storage for the JWT session token (EncryptedSharedPreferences) -
+    // approved for the Phase 1 account/session work; never store a bearer
+    // token in ProfileStore's plain SharedPreferences.
+    implementation("androidx.security:security-crypto:1.0.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

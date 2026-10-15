@@ -86,6 +86,24 @@ def compute_metrics(
     }
 
 
+# Plain-language action for each dimension, reusing only the metric
+# meanings already documented at the top of this module - no new
+# scoring, no invented real-world-transfer claim.
+_NEXT_STEP_BY_DIMENSION = {
+    "language_accuracy": "Review your recent lexical and grammar mistakes - focus on accuracy in your next few turns.",
+    "repair_success_rate": "Slow down and re-read the AI partner's replies carefully - several recent turns needed a correction.",
+    "register_appropriateness": "Pay closer attention to formality level (tú vs. usted, casual vs. formal phrasing) for this purpose.",
+    "transfer_success": "Try a few different situations instead of repeating the same one - you've covered less variety than ideal.",
+}
+
+
+def _next_step(breakdown: dict[str, float], total_turns: int) -> str:
+    if total_turns == 0:
+        return "Start a conversation to get your first readiness reading - there's no activity yet to base a recommendation on."
+    weakest_dimension = min(breakdown, key=lambda k: breakdown[k])
+    return _NEXT_STEP_BY_DIMENSION[weakest_dimension]
+
+
 def compute_readiness(
     purpose: str,
     total_turns: int,
@@ -105,4 +123,5 @@ def compute_readiness(
         "breakdown": breakdown,
         "purpose": purpose,
         "weights_used": weights,
+        "next_step": _next_step(breakdown, total_turns),
     }

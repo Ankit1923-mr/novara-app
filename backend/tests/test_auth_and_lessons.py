@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.db import get_session_factory
 from app.db_models import LearnerModel, UserModel
-from tests.conftest import TEST_API_KEY
+from tests.conftest import TEST_API_KEY, auth_headers
 
 client = TestClient(app, headers={"X-API-Key": TEST_API_KEY})
 
@@ -79,7 +79,7 @@ def test_signup_email_is_case_insensitive_and_trimmed():
 
 def test_has_profile_reflects_whether_profile_exists():
     client.post("/auth/signup", json={"email": "profiletest@example.com", "password": "correcthorse123"})
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("profiletest@example.com"), json={
         "learner_id": "profiletest@example.com", "level": "A2", "region": "Madrid",
         "purpose": "trip", "interests": [], "weak_areas": []
     })
@@ -90,11 +90,11 @@ def test_has_profile_reflects_whether_profile_exists():
 # --- learner state ---
 
 def test_me_endpoint_returns_full_learner_snapshot():
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("me_test_learner"), json={
         "learner_id": "me_test_learner", "level": "A2", "region": "Barcelona",
         "purpose": "casual", "interests": ["music"], "weak_areas": ["grammar"]
     })
-    r = client.get("/me", params={"learner_id": "me_test_learner"})
+    r = client.get("/me", headers=auth_headers("me_test_learner"), params={"learner_id": "me_test_learner"})
     assert r.status_code == 200
     body = r.json()
     assert body["region"] == "Barcelona"
@@ -105,14 +105,23 @@ def test_me_endpoint_returns_full_learner_snapshot():
 
 
 def test_me_endpoint_requires_existing_learner():
-    r = client.get("/me", params={"learner_id": "never_created_for_me"})
+    r = client.get("/me", headers=auth_headers("never_created_for_me"), params={"learner_id": "never_created_for_me"})
     assert r.status_code == 404
+
+
+def test_me_endpoint_rejects_cross_account_access():
+    client.post("/profile", headers=auth_headers("me_owner"), json={
+        "learner_id": "me_owner", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    r = client.get("/me", headers=auth_headers("me_attacker"), params={"learner_id": "me_owner"})
+    assert r.status_code == 403
 
 
 # --- topics / quiz ---
 
 def test_list_topics_returns_at_least_three():
-    r = client.get("/topics", params={"learner_id": "any_learner"})
+    r = client.get("/topics", headers=auth_headers("any_learner"), params={"learner_id": "any_learner"})
     assert r.status_code == 200
     topics = r.json()
     assert len(topics) >= 3
@@ -135,25 +144,37 @@ def test_get_unknown_topic_404s():
 
 
 def test_submit_quiz_requires_existing_learner():
-    r = client.post("/topics/greetings/submit", json={"learner_id": "never_created_learner", "answers": [0, 0, 0, 0]})
+    r = client.post("/topics/greetings/submit", headers=auth_headers("never_created_learner"),
+                     json={"learner_id": "never_created_learner", "answers": [0, 0, 0, 0]})
     assert r.status_code == 404
 
 
+def test_submit_quiz_rejects_cross_account_submission():
+    client.post("/profile", headers=auth_headers("quiz_owner"), json={
+        "learner_id": "quiz_owner", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    r = client.post("/topics/greetings/submit", headers=auth_headers("quiz_attacker"),
+                     json={"learner_id": "quiz_owner", "answers": [0, 0, 0, 0]})
+    assert r.status_code == 403
+
+
 def test_submit_quiz_perfect_score_marks_topic_completed_and_updates_streak():
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("quiz_learner_1"), json={
         "learner_id": "quiz_learner_1", "level": "A2", "region": "Madrid",
         "purpose": "trip", "interests": [], "weak_areas": []
     })
     topic = client.get("/topics/greetings").json()
     correct_answers = [q["correct_index"] for q in topic["quiz"]]
 
-    r = client.post("/topics/greetings/submit", json={"learner_id": "quiz_learner_1", "answers": correct_answers})
+    r = client.post("/topics/greetings/submit", headers=auth_headers("quiz_learner_1"),
+                     json={"learner_id": "quiz_learner_1", "answers": correct_answers})
     assert r.status_code == 200
     result = r.json()
     assert result["score"] == 1.0
     assert result["missed_phrases"] == []
 
-    topics = client.get("/topics", params={"learner_id": "quiz_learner_1"}).json()
+    topics = client.get("/topics", headers=auth_headers("quiz_learner_1"), params={"learner_id": "quiz_learner_1"}).json()
     greetings = next(t for t in topics if t["topic_id"] == "greetings")
     assert greetings["completed"] is True
 
@@ -167,14 +188,15 @@ def test_submit_quiz_perfect_score_marks_topic_completed_and_updates_streak():
 
 
 def test_submit_quiz_wrong_answers_tracked_as_mistake_words():
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("quiz_learner_2"), json={
         "learner_id": "quiz_learner_2", "level": "A2", "region": "Madrid",
         "purpose": "trip", "interests": [], "weak_areas": []
     })
     topic = client.get("/topics/greetings").json()
     wrong_answers = [(q["correct_index"] + 1) % len(q["options"]) for q in topic["quiz"]]
 
-    client.post("/topics/greetings/submit", json={"learner_id": "quiz_learner_2", "answers": wrong_answers})
+    client.post("/topics/greetings/submit", headers=auth_headers("quiz_learner_2"),
+                 json={"learner_id": "quiz_learner_2", "answers": wrong_answers})
 
     db = get_session_factory()()
     try:
@@ -188,24 +210,37 @@ def test_submit_quiz_wrong_answers_tracked_as_mistake_words():
 # --- pace preference ---
 
 def test_set_pace_preference_updates_learner():
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("pace_learner_1"), json={
         "learner_id": "pace_learner_1", "level": "A2", "region": "Madrid",
         "purpose": "trip", "interests": [], "weak_areas": []
     })
-    r = client.post("/profile/pace", params={"learner_id": "pace_learner_1", "pace_preference": 1.5})
+    r = client.post("/profile/pace", headers=auth_headers("pace_learner_1"),
+                     params={"learner_id": "pace_learner_1", "pace_preference": 1.5})
     assert r.status_code == 200
     assert r.json()["pace_preference"] == 1.5
 
 
 def test_set_pace_preference_rejects_out_of_range_value():
-    client.post("/profile", json={
+    client.post("/profile", headers=auth_headers("pace_learner_2"), json={
         "learner_id": "pace_learner_2", "level": "A2", "region": "Madrid",
         "purpose": "trip", "interests": [], "weak_areas": []
     })
-    r = client.post("/profile/pace", params={"learner_id": "pace_learner_2", "pace_preference": 5.0})
+    r = client.post("/profile/pace", headers=auth_headers("pace_learner_2"),
+                     params={"learner_id": "pace_learner_2", "pace_preference": 5.0})
     assert r.status_code == 422
 
 
 def test_set_pace_preference_requires_existing_learner():
-    r = client.post("/profile/pace", params={"learner_id": "never_created", "pace_preference": 1.2})
+    r = client.post("/profile/pace", headers=auth_headers("never_created"),
+                     params={"learner_id": "never_created", "pace_preference": 1.2})
     assert r.status_code == 404
+
+
+def test_set_pace_preference_rejects_cross_account_write():
+    client.post("/profile", headers=auth_headers("pace_owner"), json={
+        "learner_id": "pace_owner", "level": "A2", "region": "Madrid",
+        "purpose": "trip", "interests": [], "weak_areas": []
+    })
+    r = client.post("/profile/pace", headers=auth_headers("pace_attacker"),
+                     params={"learner_id": "pace_owner", "pace_preference": 1.8})
+    assert r.status_code == 403

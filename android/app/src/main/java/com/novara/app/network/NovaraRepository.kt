@@ -16,6 +16,50 @@ class NovaraRepository(
         get() = profileStore.useMock
         set(value) { profileStore.useMock = value }
 
+    // Set once by MainActivity. Invoked whenever a live-mode call comes
+    // back 401 (expired/invalid session token) so the app can clear the
+    // stored token and return to login - once, not as a retry loop. A
+    // 401 from a bad X-API-Key should never happen client-side (the key
+    // is a build constant), so this only fires for the per-user token.
+    var onUnauthorized: (() -> Unit)? = null
+
+    private fun <T> Result<T>.reportIfUnauthorized(): Result<T> {
+        if (isFailure && exceptionOrNull()?.message?.startsWith("HTTP 401") == true) {
+            onUnauthorized?.invoke()
+        }
+        return this
+    }
+
+    // Accounts always hit the real backend - there is no meaningful "mock"
+    // signup/login, and a learner can't practice offline without an
+    // account existing server-side first (the ownership check needs a
+    // real signed token, which only the real /auth endpoints can issue).
+    suspend fun signup(email: String, password: String): Result<AuthResponse> {
+        return try {
+            val response = api.signup(SignupRequest(email, password))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun login(email: String, password: String): Result<AuthResponse> {
+        return try {
+            val response = api.login(LoginRequest(email, password))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun createProfile(profile: LearnerProfile): Result<ProfileResponse> {
         return if (isMockMode) {
             Result.success(
@@ -41,7 +85,7 @@ class NovaraRepository(
             } catch (e: Exception) {
                 // Return failure with fallback option
                 Result.failure(e)
-            }
+            }.reportIfUnauthorized()
         }
     }
 
@@ -61,7 +105,7 @@ class NovaraRepository(
             }
         } catch (e: Exception) {
             Result.failure(e)
-        }
+        }.reportIfUnauthorized()
     }
 
     suspend fun sendMessage(
@@ -87,7 +131,7 @@ class NovaraRepository(
             }
         } catch (e: Exception) {
             Result.failure(e)
-        }
+        }.reportIfUnauthorized()
     }
 
     suspend fun getReadiness(learnerId: String, sampleKey: String? = null): Result<ReadinessResponse> {
@@ -110,6 +154,6 @@ class NovaraRepository(
             }
         } catch (e: Exception) {
             Result.failure(e)
-        }
+        }.reportIfUnauthorized()
     }
 }

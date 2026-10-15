@@ -37,6 +37,7 @@ from app.models import (
     RepairRequest,
     ReadinessResponse,
     MAX_ID_LENGTH,
+    ConversationHistoryResponse,
     SignupRequest,
     LoginRequest,
     AuthResponse,
@@ -47,7 +48,7 @@ from app.models import (
     LearnerState,
 )
 from app.adaptive_engine import build_scenario
-from app.conversation_engine import handle_turn, reset_all_history_for_learner, remove_turn_from_history
+from app.conversation_engine import handle_turn, reset_all_history_for_learner, get_history
 from app.knowledge_graph import get_subgraph, list_situations
 from app.repair_engine import repair as run_repair, detect_repair
 from app.personalization_engine import (
@@ -140,6 +141,21 @@ def _get_current_user_email(request: Request) -> str:
     return email
 
 
+def _authorize_learner(request: Request, learner_id: str) -> None:
+    """Ownership gate for every learner-specific endpoint: the bearer
+    token's authenticated email must equal the learner_id being read or
+    written. Possession of the shared X-API-Key (verify_api_key) is a
+    separate, app-level check and is never sufficient on its own here.
+
+    Same 403 and detail text whether learner_id belongs to someone else
+    or doesn't exist at all - this must run (and reject) BEFORE any
+    "learner not found" check in the caller, so a response never
+    discloses whether a given learner_id exists."""
+    email = _get_current_user_email(request)
+    if email != learner_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this learner_id")
+
+
 def _scenario_model_to_dict(s: ScenarioModel) -> dict:
     return {
         "scenario_id": s.scenario_id,
@@ -148,6 +164,7 @@ def _scenario_model_to_dict(s: ScenarioModel) -> dict:
         "setting": s.setting,
         "situation_tags": s.situation_tags,
         "opening_line": s.opening_line,
+        "chosen_situation": s.chosen_situation,
     }
 
 
@@ -192,7 +209,8 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/profile", response_model=ProfileResponse, dependencies=[Depends(verify_api_key)])
-def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
+def create_profile(req: ProfileRequest, request: Request, db: Session = Depends(get_db)):
+    _authorize_learner(request, req.learner_id)
     learner = db.get(LearnerModel, req.learner_id)
     if learner is None:
         learner = LearnerModel(learner_id=req.learner_id)
@@ -217,7 +235,7 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
 
     # A fresh profile means a fresh conversation, too — otherwise the LLM
     # would see turns from a previous purpose/level as if they still count.
-    reset_all_history_for_learner(req.learner_id)
+    reset_all_history_for_learner(db, req.learner_id)
 
     return ProfileResponse(
         learner_id=req.learner_id,
@@ -229,7 +247,8 @@ def create_profile(req: ProfileRequest, db: Session = Depends(get_db)):
 
 
 @app.get("/scenario", response_model=ScenarioResponse, dependencies=[Depends(verify_api_key)])
-def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+def get_scenario(request: Request, learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+    _authorize_learner(request, learner_id)
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -240,6 +259,7 @@ def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH)
         interests=learner.interests,
         weak_areas=learner.weak_areas,
         recently_seen=learner.recently_seen,
+        confidence_score=learner.confidence_score,
     )
 
     # Track only the single situation the scenario was built around, not
@@ -264,6 +284,7 @@ def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH)
     scenario_row.setting = scenario["setting"]
     scenario_row.situation_tags = scenario["situation_tags"]
     scenario_row.opening_line = scenario["opening_line"]
+    scenario_row.chosen_situation = scenario["chosen_situation"]
 
     db.commit()
     return ScenarioResponse(**scenario)
@@ -272,6 +293,7 @@ def get_scenario(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH)
 @app.post("/conversation", response_model=ConversationResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("20/minute")
 def post_conversation(request: Request, req: ConversationRequest, db: Session = Depends(get_db)):
+    _authorize_learner(request, req.learner_id)
     learner = db.get(LearnerModel, req.learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -295,13 +317,37 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
     # below needs to be retried under contention.
     appended_messages: list[dict] = []
     pace_update: Optional[dict] = None
+    # Reused for both the AI partner's system prompt (steer toward these
+    # phrases) and repair detection below - the same Knowledge Graph nodes
+    # /scenario already showed the learner as "vocabulary". Looked up by
+    # chosen_situation (the single situation /scenario actually built
+    # around), NOT by iterating every tag in situation_tags - a node can
+    # carry multiple tags (e.g. "ordering" appears on both a café node
+    # and an unrelated restaurant node), so iterating situation_tags
+    # pulled in other situations' phrases entirely. Falls back to the
+    # old situation_tags-based reconstruction only for scenario rows
+    # persisted before chosen_situation existed (chosen_situation is
+    # nullable, so old rows have None here).
+    if scenario.get("chosen_situation"):
+        candidate_nodes = get_subgraph(scenario["purpose"], situation_tag=scenario["chosen_situation"])
+    else:
+        candidate_nodes = [
+            n for tag in scenario["situation_tags"]
+            for n in get_subgraph(scenario["purpose"], situation_tag=tag)
+        ]
+    vocabulary = [
+        {"phrase": n["phrase"], "meaning": n["meaning"], "cultural_note": n["culture_note"]}
+        for n in candidate_nodes
+    ]
     try:
         reply, appended_messages = handle_turn(
+            db=db,
             learner_id=req.learner_id,
             scenario=scenario,
             message=req.message,
             turn_number=req.turn_number,
             pace_preference=learner.pace_preference,
+            vocabulary=vocabulary,
         )
 
         # Check the learner's message against the graph phrases relevant to
@@ -309,12 +355,12 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
         # it's close enough to a known phrase to be worth repairing, exactly
         # matches (no repair), or is free-form conversation outside any
         # known phrase (also no repair — the AI partner allows open dialogue).
-        candidate_nodes = [
-            n for tag in scenario["situation_tags"]
-            for n in get_subgraph(scenario["purpose"], situation_tag=tag)
-        ]
         candidate_patterns = [n["phrase"] for n in candidate_nodes] or [scenario["opening_line"]]
-        repair_result = detect_repair(req.message, candidate_patterns, pace_preference=learner.pace_preference)
+        candidate_meanings = {n["phrase"]: n["meaning"] for n in candidate_nodes}
+        repair_result = detect_repair(
+            req.message, candidate_patterns, pace_preference=learner.pace_preference,
+            candidate_meanings=candidate_meanings,
+        )
 
         # Personalization Engine is still the source of truth for the EMA
         # formula/signals — called here so its documented role holds even
@@ -357,7 +403,11 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
             if current is not None:
                 db.refresh(current)
             if current is None or current.profile_generation != initial_generation:
-                remove_turn_from_history(req.learner_id, req.scenario_id, appended_messages)
+                # Discard this turn's conversation rows (flushed, not yet
+                # committed, by handle_turn above) along with everything
+                # else pending in this transaction - a single rollback,
+                # not identity-based cleanup of a shared in-memory list.
+                db.rollback()
                 return ConversationResponse(
                     reply=reply,
                     repair_triggered=repair_result is not None,
@@ -425,15 +475,11 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
                 detail="Too many concurrent updates for this learner — please retry.",
             )
     except Exception:
-        # DB changes roll back on their own (session is discarded
-        # without a commit), but the in-memory conversation history
-        # mutated by handle_turn() would otherwise survive a failure
-        # here and diverge from the persisted state - undo it too.
-        # Removed by identity (not by truncating to a saved length): a
-        # concurrent sibling call for the same learner+scenario may have
-        # appended its own, already-successful turn in between, and
-        # length-based truncation would silently delete that too.
-        remove_turn_from_history(req.learner_id, req.scenario_id, appended_messages)
+        # Conversation turns from handle_turn() above were flushed, not
+        # committed - rollback discards them (and anything else pending
+        # in this transaction) atomically, so a failed turn never leaves
+        # a half-persisted conversation or diverges from learner state.
+        db.rollback()
         raise
 
     return ConversationResponse(
@@ -446,6 +492,23 @@ def post_conversation(request: Request, req: ConversationRequest, db: Session = 
     )
 
 
+@app.get("/conversation/history", response_model=ConversationHistoryResponse, dependencies=[Depends(verify_api_key)])
+def get_conversation_history(
+    request: Request,
+    learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH),
+    scenario_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH),
+    db: Session = Depends(get_db),
+):
+    """Additive endpoint (not part of the frozen 5) - lets a client reload
+    a learner's own prior turns for a scenario instead of only ever
+    seeing whatever is still in local UI state for the current session."""
+    _authorize_learner(request, learner_id)
+    if db.get(LearnerModel, learner_id) is None:
+        raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
+    turns = get_history(db, learner_id, scenario_id)
+    return ConversationHistoryResponse(learner_id=learner_id, scenario_id=scenario_id, turns=turns)
+
+
 @app.post("/repair", response_model=RepairDetail, dependencies=[Depends(verify_api_key)])
 def post_repair(req: RepairRequest):
     result = run_repair(req.learner_utterance, req.expected_pattern)
@@ -453,7 +516,8 @@ def post_repair(req: RepairRequest):
 
 
 @app.get("/readiness", response_model=ReadinessResponse, dependencies=[Depends(verify_api_key)])
-def get_readiness(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+def get_readiness(request: Request, learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+    _authorize_learner(request, learner_id)
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -471,9 +535,10 @@ def get_readiness(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH
 
 
 @app.get("/me", response_model=LearnerState, dependencies=[Depends(verify_api_key)])
-def get_learner_state(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+def get_learner_state(request: Request, learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
     """Full learner snapshot for the web app's dashboard - everything
     /profile, /readiness and /topics each show a slice of, in one call."""
+    _authorize_learner(request, learner_id)
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")
@@ -495,7 +560,8 @@ def get_learner_state(learner_id: str = Query(min_length=1, max_length=MAX_ID_LE
 
 
 @app.get("/topics", response_model=list[TopicSummary], dependencies=[Depends(verify_api_key)])
-def get_topics(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+def get_topics(request: Request, learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH), db: Session = Depends(get_db)):
+    _authorize_learner(request, learner_id)
     learner = db.get(LearnerModel, learner_id)
     completed = set(learner.topics_completed) if learner else set()
     return [
@@ -517,7 +583,8 @@ def get_topic_detail(topic_id: str):
 
 
 @app.post("/topics/{topic_id}/submit", response_model=QuizResult, dependencies=[Depends(verify_api_key)])
-def submit_quiz(topic_id: str, req: QuizSubmission, db: Session = Depends(get_db)):
+def submit_quiz(topic_id: str, req: QuizSubmission, request: Request, db: Session = Depends(get_db)):
+    _authorize_learner(request, req.learner_id)
     if lesson_content.get_topic(topic_id) is None:
         raise HTTPException(status_code=404, detail="topic not found")
 
@@ -578,7 +645,8 @@ def submit_quiz(topic_id: str, req: QuizSubmission, db: Session = Depends(get_db
 
 
 @app.post("/profile/pace", dependencies=[Depends(verify_api_key)])
-def set_pace_preference(learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH),
+def set_pace_preference(request: Request,
+                         learner_id: str = Query(min_length=1, max_length=MAX_ID_LENGTH),
                          pace_preference: float = Query(ge=0.5, le=2.0),
                          db: Session = Depends(get_db)):
     """Learner-controlled speed multiplier - distinct from pace_score,
@@ -589,6 +657,7 @@ def set_pace_preference(learner_id: str = Query(min_length=1, max_length=MAX_ID_
     learner explicitly asserting a value, so automatic adjustment should
     resume counting from here, not immediately re-trigger off a streak
     that was already in progress before they acted."""
+    _authorize_learner(request, learner_id)
     learner = db.get(LearnerModel, learner_id)
     if learner is None:
         raise HTTPException(status_code=404, detail="learner_id not found — call /profile first")

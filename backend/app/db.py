@@ -17,7 +17,7 @@ lazy client construction.
 """
 
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 from dotenv import load_dotenv
@@ -65,11 +65,39 @@ def get_db():
         db.close()
 
 
+# Columns added to an already-existing table after it was first deployed.
+# create_all() below only creates MISSING tables - it never alters a
+# table that already exists, so a column added to a model after the
+# real production table was created needs an explicit, idempotent
+# ALTER TABLE here. Each entry is (table_name, column_name, column_ddl).
+# Nullable/no-default only - never a destructive or data-touching change.
+_ADDITIVE_COLUMNS = [
+    ("scenarios", "chosen_situation", "VARCHAR"),
+]
+
+
+def _add_missing_columns(engine) -> None:
+    inspector = inspect(engine)
+    for table_name, column_name, column_ddl in _ADDITIVE_COLUMNS:
+        if table_name not in inspector.get_table_names():
+            continue  # brand-new table - create_all() already created it with every column
+        existing_columns = {c["name"] for c in inspector.get_columns(table_name)}
+        if column_name in existing_columns:
+            continue  # already migrated - safe to call every startup
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}"))
+
+
 def init_db():
-    """Creates tables if they don't exist. Safe to call every startup —
-    a no-op against tables that already exist."""
+    """Creates tables if they don't exist, then adds any columns missing
+    from tables that already existed before those columns were added to
+    the model. Safe to call every startup - a no-op once everything is
+    already up to date. Never drops or renames anything, never touches
+    existing row data."""
     from app import db_models  # noqa: F401 — ensures models are registered on Base before create_all
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _add_missing_columns(engine)
 
 
 def reset_engine_cache():

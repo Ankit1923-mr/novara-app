@@ -59,7 +59,7 @@ def test_compute_readiness_matches_contract_shape():
         purpose="trip", total_turns=10, repair_counts={"lexical": 1},
         distinct_situations_visited=5, total_known_situations=10,
     )
-    assert set(result.keys()) == {"aggregate_score", "breakdown", "purpose", "weights_used"}
+    assert set(result.keys()) == {"aggregate_score", "breakdown", "purpose", "weights_used", "next_step"}
     assert 0.0 <= result["aggregate_score"] <= 1.0
 
 
@@ -103,3 +103,36 @@ def test_three_synthetic_learners_rank_correctly_for_casual_purpose():
     )
 
     assert high_performer["aggregate_score"] > mid_performer["aggregate_score"] > low_performer["aggregate_score"]
+
+
+# --- next_step: short, actionable review ---
+
+def test_zero_turns_gets_a_start_here_next_step():
+    result = compute_readiness(
+        purpose="trip", total_turns=0, repair_counts={},
+        distinct_situations_visited=0, total_known_situations=10,
+    )
+    assert "Start a conversation" in result["next_step"]
+
+
+def test_next_step_targets_the_weakest_dimension():
+    # Tests _next_step directly against a synthetic breakdown - a real
+    # compute_metrics() breakdown can't isolate register_appropriateness
+    # as strictly weaker than repair_success_rate (the latter's numerator
+    # always includes the former's), so this verifies the mapping logic
+    # itself rather than an unreachable combination of real inputs.
+    from app.readiness_engine import _next_step
+    breakdown = {
+        "language_accuracy": 0.9, "repair_success_rate": 0.8,
+        "register_appropriateness": 0.2, "transfer_success": 0.7,
+    }
+    assert "formality" in _next_step(breakdown, total_turns=10).lower()
+
+
+def test_next_step_present_for_all_four_purposes():
+    for purpose in ("trip", "casual", "exam", "relocation"):
+        result = compute_readiness(
+            purpose=purpose, total_turns=5, repair_counts={"lexical": 1},
+            distinct_situations_visited=2, total_known_situations=5,
+        )
+        assert isinstance(result["next_step"], str) and len(result["next_step"]) > 0

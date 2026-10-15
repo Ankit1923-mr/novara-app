@@ -46,7 +46,13 @@ fun IntakeScreen(
     // the previous fire-and-forget Unit callback, which let navigation to
     // "scenario" proceed even when /profile creation failed.
     onProfileCreated: suspend (LearnerProfile) -> Boolean,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    // When set (an authenticated session's email), used as learner_id
+    // instead of generating a fresh anonymous "android_<timestamp>" id -
+    // the backend's ownership check requires learner_id == the JWT's
+    // email for every protected call. Null preserves the original
+    // anonymous-mode behavior exactly.
+    learnerId: String? = null
 ) {
     var selectedLevel by remember { mutableStateOf("B1") }
     var selectedPurpose by remember { mutableStateOf("trip") }
@@ -261,9 +267,9 @@ fun IntakeScreen(
                 errorMessage = null
                 isLoading = true
 
-                val learnerId = "android_" + System.currentTimeMillis().toString(36)
+                val resolvedLearnerId = learnerId ?: ("android_" + System.currentTimeMillis().toString(36))
                 val profile = LearnerProfile(
-                    learnerId = learnerId,
+                    learnerId = resolvedLearnerId,
                     language = "spanish",
                     level = selectedLevel,
                     region = cleanRegion,

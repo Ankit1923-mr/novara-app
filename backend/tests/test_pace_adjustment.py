@@ -10,7 +10,7 @@ from app.personalization_engine import (
 )
 from app.repair_engine import detect_repair, _trigger_bounds, REPAIR_TRIGGER_MIN_OVERLAP, REPAIR_TRIGGER_MAX_OVERLAP
 from app.main import app
-from tests.conftest import TEST_API_KEY
+from tests.conftest import TEST_API_KEY, auth_headers
 
 client = TestClient(app, headers={"X-API-Key": TEST_API_KEY})
 
@@ -106,7 +106,7 @@ def test_relaxed_pace_forgives_a_borderline_overlap_that_fast_pace_would_flag():
 # ---------------------------------------------------------------- integration: /conversation wiring
 
 def _make_learner(learner_id="pace_test@example.com"):
-    resp = client.post("/profile", json={
+    resp = client.post("/profile", headers=auth_headers(learner_id), json={
         "learner_id": learner_id, "purpose": "trip", "level": "A1", "region": "spain",
         "interests": [], "weak_areas": [],
     })
@@ -116,9 +116,9 @@ def _make_learner(learner_id="pace_test@example.com"):
 
 def test_conversation_response_includes_pace_fields(monkeypatch):
     learner_id = _make_learner("pace_fields@example.com")
-    scenario = client.get(f"/scenario?learner_id={learner_id}").json()
+    scenario = client.get(f"/scenario?learner_id={learner_id}", headers=auth_headers(learner_id)).json()
 
-    resp = client.post("/conversation", json={
+    resp = client.post("/conversation", headers=auth_headers(learner_id), json={
         "learner_id": learner_id,
         "scenario_id": scenario["scenario_id"],
         "message": "hola",
@@ -134,17 +134,17 @@ def test_conversation_response_includes_pace_fields(monkeypatch):
 
 def test_two_repairs_in_a_row_slows_down_pace_via_conversation_endpoint():
     learner_id = _make_learner("pace_slowdown@example.com")
-    scenario = client.get(f"/scenario?learner_id={learner_id}").json()
+    scenario = client.get(f"/scenario?learner_id={learner_id}", headers=auth_headers(learner_id)).json()
 
     # "no entiendo" always triggers a repair (comprehension marker)
-    r1 = client.post("/conversation", json={
+    r1 = client.post("/conversation", headers=auth_headers(learner_id), json={
         "learner_id": learner_id, "scenario_id": scenario["scenario_id"],
         "message": "no entiendo", "turn_number": 1,
     }).json()
     assert r1["repair_triggered"] is True
     assert r1["pace_changed"] is False  # only 1 repair so far
 
-    r2 = client.post("/conversation", json={
+    r2 = client.post("/conversation", headers=auth_headers(learner_id), json={
         "learner_id": learner_id, "scenario_id": scenario["scenario_id"],
         "message": "no entiendo", "turn_number": 2,
     }).json()
@@ -155,24 +155,24 @@ def test_two_repairs_in_a_row_slows_down_pace_via_conversation_endpoint():
 
 def test_manual_pace_override_resets_streak_counters():
     learner_id = _make_learner("pace_manual_reset@example.com")
-    scenario = client.get(f"/scenario?learner_id={learner_id}").json()
+    scenario = client.get(f"/scenario?learner_id={learner_id}", headers=auth_headers(learner_id)).json()
 
     # build up one repair toward the slowdown streak
-    client.post("/conversation", json={
+    client.post("/conversation", headers=auth_headers(learner_id), json={
         "learner_id": learner_id, "scenario_id": scenario["scenario_id"],
         "message": "no entiendo", "turn_number": 1,
     })
 
     # manual override
-    resp = client.post(f"/profile/pace?learner_id={learner_id}&pace_preference=1.5")
+    resp = client.post(f"/profile/pace?learner_id={learner_id}&pace_preference=1.5", headers=auth_headers(learner_id))
     assert resp.status_code == 200
 
-    me = client.get(f"/me?learner_id={learner_id}").json()
+    me = client.get(f"/me?learner_id={learner_id}", headers=auth_headers(learner_id)).json()
     assert me["pace_preference"] == 1.5
 
     # one more repair should NOT immediately trigger a slowdown, since the
     # override should have reset the in-progress streak
-    r = client.post("/conversation", json={
+    r = client.post("/conversation", headers=auth_headers(learner_id), json={
         "learner_id": learner_id, "scenario_id": scenario["scenario_id"],
         "message": "no entiendo", "turn_number": 2,
     }).json()
@@ -186,7 +186,7 @@ def test_two_wrong_quiz_answers_also_slow_down_pace():
     learner_id = _make_learner("pace_quiz_slowdown@example.com")
     # "greetings" has 4 questions; correct_index values are [1, 2, 3, 0] —
     # answer the first two wrong (0, 0) and the rest right.
-    resp = client.post("/topics/greetings/submit", json={
+    resp = client.post("/topics/greetings/submit", headers=auth_headers(learner_id), json={
         "learner_id": learner_id,
         "answers": [0, 0, 3, 0],
     })
@@ -197,13 +197,13 @@ def test_two_wrong_quiz_answers_also_slow_down_pace():
     assert body["pace_preference"] == 1.0 - PACE_STEP
     assert body["pace_change_reason"] == "slowed down after 2 mistakes in a row"
 
-    me = client.get(f"/me?learner_id={learner_id}").json()
+    me = client.get(f"/me?learner_id={learner_id}", headers=auth_headers(learner_id)).json()
     assert me["pace_preference"] == 1.0 - PACE_STEP
 
 
 def test_all_correct_quiz_does_not_change_pace():
     learner_id = _make_learner("pace_quiz_allcorrect@example.com")
-    resp = client.post("/topics/greetings/submit", json={
+    resp = client.post("/topics/greetings/submit", headers=auth_headers(learner_id), json={
         "learner_id": learner_id,
         "answers": [1, 2, 3, 0],  # all correct
     })
@@ -211,3 +211,42 @@ def test_all_correct_quiz_does_not_change_pace():
     assert body["correct_count"] == 4
     assert body["pace_changed"] is False
     assert body["pace_preference"] == 1.0
+
+
+# ---------------------------------------------------------------- integration: confidence_score reaches /scenario
+
+def test_scenario_endpoint_passes_persisted_confidence_score_into_adaptive_selection():
+    """Proves the wiring end-to-end over HTTP, not just that
+    score_all_situations() works when called directly: a learner's
+    DB-persisted confidence_score must actually change the scenario
+    /scenario returns, via main.py's get_scenario -> build_scenario call."""
+    from app.db import get_session_factory
+    from app.db_models import LearnerModel
+
+    learner_id = "confidence_scenario_integration@example.com"
+    resp = client.post("/profile", headers=auth_headers(learner_id), json={
+        "learner_id": learner_id, "purpose": "trip", "level": "A1", "region": "spain",
+        "interests": [], "weak_areas": ["repair"],
+    })
+    assert resp.status_code == 200
+
+    # /profile always resets confidence_score to 0.5 (>= the 0.4 threshold,
+    # no boost) - force it below threshold directly in the DB, since no
+    # API path sets confidence_score to an arbitrary value (it only moves
+    # via the /conversation EMA, which would be slow and indirect to test).
+    db = get_session_factory()()
+    try:
+        learner = db.get(LearnerModel, learner_id)
+        learner.confidence_score = 0.2
+        db.commit()
+    finally:
+        db.close()
+
+    scenario = client.get("/scenario", headers=auth_headers(learner_id),
+                           params={"learner_id": learner_id}).json()
+    repair_score = next(s for s in scenario["selection_scores"] if s["situation_tag"] == "repair")
+    # weak_area_overlap=["repair"] (len 1) doubled to 2, plus novelty_bonus
+    # (1, never seen before) = 3 - proves the persisted confidence_score
+    # reached build_scenario through the real /scenario request path.
+    assert repair_score["weak_area_overlap"] == ["repair"]
+    assert repair_score["score"] == 3

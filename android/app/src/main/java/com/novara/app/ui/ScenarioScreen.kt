@@ -34,7 +34,8 @@ fun ScenarioScreen(
     initialPurpose: String,
     repository: NovaraRepository,
     onBeginConversation: (ScenarioResponse) -> Unit,
-    onEditProfile: () -> Unit
+    onEditProfile: () -> Unit,
+    onLogout: (() -> Unit)? = null
 ) {
     var selectedPurpose by remember { mutableStateOf(initialPurpose) }
     var scenario by remember { mutableStateOf<ScenarioResponse?>(null) }
@@ -75,8 +76,15 @@ fun ScenarioScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TextButton(onClick = onEditProfile) {
-                Text("← Edit Profile", color = TextSecondary, fontSize = 13.sp)
+            Row {
+                TextButton(onClick = onEditProfile) {
+                    Text("← Edit Profile", color = TextSecondary, fontSize = 13.sp)
+                }
+                if (onLogout != null) {
+                    TextButton(onClick = onLogout) {
+                        Text("Log out", color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
             }
 
             // Mock vs Real Toggle (Task 7)

@@ -40,6 +40,45 @@ VERB_CONJUGATION_PAIRS = [
     ("eres", "es"), ("vas", "va"), ("dices", "dice"), ("sabes", "sabe"),
 ]
 
+# Function-word pairs that signal a genuine lexical/grammatical-category
+# confusion (ser vs. estar) rather than a formality mismatch or a simple
+# accent/conjugation slip. This swap barely moves the content-word
+# overlap ratio (the surrounding content words are unchanged), so
+# without this explicit check it falls through to the overlap-based
+# "grammar" default — measured as a real 0% lexical-recall gap on a
+# 15-sample COWS-L2H-style baseline (see backend/scripts/
+# repair_engine_cows_l2h_baseline.py). Each entry is (words that signal
+# the WRONG category if present in the learner's utterance, words that
+# signal the CORRECT category if present in the expected pattern) —
+# both normalized (lowercase, no accents).
+#
+# por/para was deliberately dropped from this list: "por" collides with
+# the near-universal phrase "por favor", which has nothing to do with
+# por/para confusion, so the same guard pattern that correctly excludes
+# ser/estar false positives still flagged "Quiero un cafe por favor" vs
+# an expected sentence using "para" for an unrelated purpose (location,
+# not destination) as a false "lexical" classification. Fixing that
+# properly needs a stock-phrase exclusion or position-aware matching,
+# not a one-line change, so por/para is left as a known, undetected gap
+# rather than shipped with a false-positive-prone rule.
+FUNCTION_WORD_CONFUSIONS: list[tuple[set[str], set[str]]] = [
+    ({"es", "son", "soy"}, {"esta", "estan", "estoy", "estas"}),   # ser used where estar expected
+    ({"esta", "estan", "estoy", "estas"}, {"es", "son", "soy"}),   # estar used where ser expected
+]
+
+
+def _has_function_word_confusion(utterance: str, expected_pattern: str) -> bool:
+    u_words = set(_normalize(utterance).split())
+    e_words = set(_normalize(expected_pattern).split())
+    for wrong_words, right_words in FUNCTION_WORD_CONFUSIONS:
+        # Only a confusion if the "wrong" word is absent from the expected
+        # pattern too - otherwise the learner's word is also legitimately
+        # used there and this isn't a category swap.
+        if (wrong_words & u_words) and (right_words & e_words) and not (wrong_words & e_words):
+            return True
+    return False
+
+
 # Closed-class words stripped out before comparing content words for the
 # lexical-gap check — keeps "quiero un té" vs "quiero un café" from
 # looking like a near-total match just because the carrier words agree.
@@ -106,6 +145,12 @@ def classify_error(utterance: str, expected_pattern: str) -> str:
     if any(marker in normalized for marker in COMPREHENSION_MARKERS):
         return "comprehension"
 
+    # Checked before the overlap ratio: a ser/estar or por/para swap keeps
+    # overlap high (the surrounding content words are unchanged), so
+    # without this explicit check it would fall through to "grammar".
+    if _has_function_word_confusion(utterance, expected_pattern):
+        return "lexical"
+
     overlap = _content_overlap_ratio(utterance, expected_pattern)
     if overlap < 0.6:
         return "lexical"
@@ -117,22 +162,56 @@ def select_strategy(error_type: str) -> str:
     return STRATEGY_BY_ERROR_TYPE.get(error_type, "clarify")
 
 
-def generate_repair(error_type: str, strategy: str, expected_pattern: str) -> str:
+def _reliable_reason(error_type: str, utterance: str, expected_pattern: str) -> str | None:
+    """A concise "why" for the two cases classify_error has deterministic,
+    specific evidence for - not a generated explanation, just naming
+    which existing structural check actually fired. Every other
+    error_type (plain overlap-based lexical/grammar) has no such
+    specific evidence, so this returns None for them rather than
+    inventing a reason - generate_repair falls back to its original
+    generic text in that case."""
+    if error_type == "register" and _has_register_mismatch(utterance, expected_pattern):
+        return "this situation calls for the more formal \"usted\" form, not \"tú\""
+    if error_type == "lexical" and _has_function_word_confusion(utterance, expected_pattern):
+        return "ser and estar are different verbs for \"to be\" - this context needs the other one"
+    return None
+
+
+def generate_repair(error_type: str, strategy: str, expected_pattern: str,
+                     expected_meaning: str | None = None, reason: str | None = None) -> str:
+    """expected_meaning (the graph node's existing English meaning for
+    expected_pattern) and reason (why, only when classify_error had
+    specific structural evidence - see _reliable_reason) are only ever
+    passed by detect_repair when there was a confident best-pattern
+    match. Callers with no such evidence (e.g. a comprehension signal
+    with no real candidate) pass neither and get the exact same generic
+    text as before these parameters existed."""
     if strategy == "clarify":
         return "¿Puede repetir, por favor?"
     if strategy == "hint":
-        return f"Se dice: \"{expected_pattern}\"."
+        base = f"Se dice: \"{expected_pattern}\"."
+        if expected_meaning:
+            base += f" ({expected_meaning})"
+        if reason:
+            base += f" — {reason}."
+        return base
     if strategy == "rephrase":
-        return f"Prueba con: \"{expected_pattern}\"."
+        base = f"Prueba con: \"{expected_pattern}\"."
+        if expected_meaning:
+            base += f" ({expected_meaning})"
+        if reason:
+            base += f" — {reason}."
+        return base
     return expected_pattern
 
 
-def repair(utterance: str, expected_pattern: str) -> dict:
+def repair(utterance: str, expected_pattern: str, expected_meaning: str | None = None) -> dict:
     """Full pipeline: classify -> select strategy -> generate repair text.
     Matches the /repair contract response shape."""
     error_type = classify_error(utterance, expected_pattern)
     strategy = select_strategy(error_type)
-    repair_text = generate_repair(error_type, strategy, expected_pattern)
+    reason = _reliable_reason(error_type, utterance, expected_pattern)
+    repair_text = generate_repair(error_type, strategy, expected_pattern, expected_meaning, reason)
     return {
         "error_type": error_type,
         "strategy": strategy,
@@ -168,7 +247,8 @@ def _trigger_bounds(pace_preference: float | None) -> tuple[float, float]:
     return REPAIR_TRIGGER_MIN_OVERLAP, REPAIR_TRIGGER_MAX_OVERLAP
 
 
-def detect_repair(utterance: str, candidate_patterns: list[str], pace_preference: float | None = None) -> dict | None:
+def detect_repair(utterance: str, candidate_patterns: list[str], pace_preference: float | None = None,
+                   candidate_meanings: dict[str, str] | None = None) -> dict | None:
     """Finds the graph phrase closest to `utterance` among
     `candidate_patterns` and decides whether it's worth repairing.
 
@@ -202,4 +282,9 @@ def detect_repair(utterance: str, candidate_patterns: list[str], pace_preference
         return None  # close enough, no repair
     if best_overlap < min_overlap:
         return None  # not a recognizable attempt at any known phrase — free-form reply
-    return repair(utterance, best_pattern)
+    # Only attached when there's a confident best_pattern match (the case
+    # reached here) - the comprehension/too-short early returns above pass
+    # no meaning, since there's no reliably-identified expected phrase to
+    # explain in those cases, preserving the original generic repair text.
+    meaning = (candidate_meanings or {}).get(best_pattern)
+    return repair(utterance, best_pattern, expected_meaning=meaning)
