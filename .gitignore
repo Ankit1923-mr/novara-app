@@ -1,28 +1,15 @@
-# Python
-backend/__pycache__/
-backend/**/__pycache__/
-backend/.venv/
-backend/venv/
-backend/*.egg-info/
-backend/.pytest_cache/
-*.pyc
-
-# Android
-android/.gradle/
-android/local.properties
-android/.idea/
-android/build/
-android/app/build/
-android/*/build/
-android/.cxx/
-android/captures/
 *.iml
-
-# Env / secrets
-.env
-**/.env
-*.key
-
-# OS
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
 .DS_Store
-Thumbs.db
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
