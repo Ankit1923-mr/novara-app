@@ -17,9 +17,13 @@ import com.novara.app.model.ScenarioResponse
 import com.novara.app.network.NovaraNetworkClient
 import com.novara.app.network.NovaraRepository
 import com.novara.app.ui.*
-import com.novara.app.ui.theme.BgPrimary
 import com.novara.app.ui.theme.NovaraTheme
+import com.novara.app.ui.theme.WarmIvory
 
+/**
+ * NOVARA Main Activity
+ * NavHost connecting all 11 screens of the NOVARA Editorial UI Redesign.
+ */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -29,8 +33,7 @@ class MainActivity : ComponentActivity() {
         val tokenStore = TokenStore(applicationContext)
         val repository = NovaraRepository(profileStore)
 
-        // Attach whatever session token is already stored (app relaunch
-        // with an existing login) before any request fires.
+        // Attach stored session token at startup
         NovaraNetworkClient.bearerToken = tokenStore.token
 
         setContent {
@@ -38,23 +41,13 @@ class MainActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(BgPrimary)
+                        .background(WarmIvory)
                 ) {
                     val navController = rememberNavController()
 
-                    // Phase 1: every learner now needs an authenticated session
-                    // (learner_id == the account's email) before intake/scenario -
-                    // the backend requires a matching bearer token on every
-                    // learner-specific endpoint. A profile saved locally under
-                    // an old anonymous "android_<timestamp>" id (from before
-                    // this change) is left exactly as-is on disk and on the
-                    // backend - it is never auto-migrated, merged, or deleted -
-                    // but it's no longer reachable through this start-up path
-                    // unless that same anonymous id is also an authenticated
-                    // account's email, which it structurally cannot be.
                     val startDestination = remember {
-                        if (!tokenStore.isLoggedIn) "auth"
-                        else if (profileStore.loadProfile()?.learnerId == tokenStore.email) "scenario"
+                        if (!tokenStore.isLoggedIn) "splash"
+                        else if (profileStore.loadProfile()?.learnerId == tokenStore.email) "home"
                         else "intake"
                     }
 
@@ -74,7 +67,20 @@ class MainActivity : ComponentActivity() {
                     repository.onUnauthorized = { logout() }
 
                     NavHost(navController = navController, startDestination = startDestination) {
-                        // 0. Auth Screen (Phase 1: accounts)
+
+                        // Screen 1 — Splash Screen
+                        composable("splash") {
+                            SplashScreen(
+                                onContinue = {
+                                    val destination = if (tokenStore.isLoggedIn) "home" else "auth"
+                                    navController.navigate(destination) {
+                                        popUpTo("splash") { inclusive = true }
+                                    }
+                                }
+                            )
+                        }
+
+                        // Screen 2 — Authentication
                         composable("auth") {
                             val anonymousId = profileStore.loadProfile()?.learnerId
                                 ?.takeIf { it.startsWith("android_") }
@@ -85,7 +91,7 @@ class MainActivity : ComponentActivity() {
                                     tokenStore.token = auth.token
                                     tokenStore.email = auth.email
                                     NovaraNetworkClient.bearerToken = auth.token
-                                    val destination = if (auth.hasProfile) "scenario" else "intake"
+                                    val destination = if (auth.hasProfile) "home" else "intake"
                                     navController.navigate(destination) {
                                         popUpTo("auth") { inclusive = true }
                                     }
@@ -93,23 +99,63 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 1. Intake Screen (Task 2)
+                        // Screen 3 — Home Dashboard
+                        composable("home") {
+                            val profile = currentProfile ?: profileStore.loadProfile()
+                            val learnerId = tokenStore.email ?: profile?.learnerId ?: "sakshi@example.com"
+
+                            HomeScreen(
+                                learnerId = learnerId,
+                                repository = repository,
+                                profileStore = profileStore,
+                                onNavigateTab = { route ->
+                                    if (route != "home") {
+                                        navController.navigate(route) {
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
+                                onStartLesson = {
+                                    navController.navigate("scenario")
+                                },
+                                onOpenProfile = {
+                                    navController.navigate("readiness")
+                                }
+                            )
+                        }
+
+                        // Screen 4 — Immersion Hub
+                        composable("immersion_hub") {
+                            val profile = currentProfile ?: profileStore.loadProfile()
+                            val learnerId = tokenStore.email ?: profile?.learnerId ?: "sakshi@example.com"
+
+                            ImmersionHubScreen(
+                                learnerId = learnerId,
+                                repository = repository,
+                                profileStore = profileStore,
+                                onNavigateTab = { route ->
+                                    if (route != "immersion_hub") {
+                                        navController.navigate(route) {
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
+                                onProfileDispatched = {
+                                    navController.navigate("scenario")
+                                }
+                            )
+                        }
+
+                        // Screen 5 — Learning Intake
                         composable("intake") {
                             IntakeScreen(
                                 learnerId = tokenStore.email,
                                 onProfileCreated = { newProfile ->
-                                    // Save locally (Task 3)
                                     profileStore.saveProfile(newProfile)
                                     currentProfile = newProfile
-
-                                    // Call backend (Task 7) - only navigate
-                                    // onward if it actually succeeded;
-                                    // IntakeScreen shows the failure and
-                                    // keeps the learner on this screen
-                                    // otherwise.
                                     val result = repository.createProfile(newProfile)
                                     if (result.isSuccess) {
-                                        navController.navigate("scenario") {
+                                        navController.navigate("home") {
                                             popUpTo("intake") { inclusive = true }
                                         }
                                     }
@@ -117,16 +163,28 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateBack = {
                                     if (profileStore.hasValidProfile()) {
-                                        navController.navigate("scenario")
+                                        navController.navigate("home")
                                     }
                                 }
                             )
                         }
 
-                        // 2. Scenario Screen (Task 4)
+                        // Screen 6 — Topic Quiz Screen
+                        composable("topic_quiz") {
+                            TopicQuizScreen(
+                                onNavigateNext = {
+                                    navController.navigate("curriculum_quiz")
+                                },
+                                onNavigateBack = {
+                                    navController.popBackStack()
+                                }
+                            )
+                        }
+
+                        // Screen 7 — Scenario Lesson
                         composable("scenario") {
                             val profile = currentProfile ?: profileStore.loadProfile()
-                            val learnerId = profile?.learnerId ?: "learner_demo"
+                            val learnerId = tokenStore.email ?: profile?.learnerId ?: "sakshi@example.com"
                             val purpose = profile?.purpose ?: "trip"
 
                             ScenarioScreen(
@@ -138,16 +196,16 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate("conversation")
                                 },
                                 onEditProfile = {
-                                    navController.navigate("intake")
+                                    navController.navigate("immersion_hub")
                                 },
                                 onLogout = { logout() }
                             )
                         }
 
-                        // 3. Conversation Screen (Task 5)
+                        // Screen 8 — Conversation Screen
                         composable("conversation") {
                             val profile = currentProfile ?: profileStore.loadProfile()
-                            val learnerId = profile?.learnerId ?: "learner_demo"
+                            val learnerId = tokenStore.email ?: profile?.learnerId ?: "sakshi@example.com"
                             val sc = activeScenario ?: com.novara.app.data.MockDataProvider.getScenarioForPurpose(profile?.purpose ?: "trip")
 
                             ConversationScreen(
@@ -163,10 +221,10 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 4. Readiness Screen (Task 6)
+                        // Screen 9 — Readiness Dashboard
                         composable("readiness") {
                             val profile = currentProfile ?: profileStore.loadProfile()
-                            val learnerId = profile?.learnerId ?: "learner_demo"
+                            val learnerId = tokenStore.email ?: profile?.learnerId ?: "sakshi@example.com"
 
                             ReadinessScreen(
                                 learnerId = learnerId,
@@ -178,6 +236,34 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate("scenario") {
                                         popUpTo("scenario") { inclusive = true }
                                     }
+                                }
+                            )
+                        }
+
+                        // Screen 10 — Topic List Screen
+                        composable("topic_list") {
+                            TopicListScreen(
+                                onNavigateTab = { route ->
+                                    if (route != "topic_list") {
+                                        navController.navigate(route) {
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
+                                onSelectTopic = {
+                                    navController.navigate("topic_quiz")
+                                }
+                            )
+                        }
+
+                        // Screen 11 — Curriculum & Quizzes
+                        composable("curriculum_quiz") {
+                            CurriculumQuizScreen(
+                                onNavigateBack = {
+                                    navController.popBackStack()
+                                },
+                                onReviewAnswers = {
+                                    navController.navigate("readiness")
                                 }
                             )
                         }
