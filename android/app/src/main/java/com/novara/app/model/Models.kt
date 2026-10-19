@@ -91,13 +91,9 @@ data class RepairDetail(
 
 data class ConversationResponse(
     @SerializedName("reply") val reply: String,
-    @SerializedName("repair_triggered") val repairTriggered: Boolean,
-    @SerializedName("repair") val repair: RepairDetail?,
-    // Additive fields, not part of the frozen contract - surfaces automatic
-    // pace adjustment (backend/app/models.py's ConversationResponse). Same
-    // defaults as the backend's own Pydantic model, so a response that
-    // omits them (or an older cached mock payload) still deserializes
-    // correctly instead of failing.
+    @SerializedName("translation") val translation: String? = null,
+    @SerializedName("repair_triggered") val repairTriggered: Boolean = false,
+    @SerializedName("repair") val repair: RepairDetail? = null,
     @SerializedName("pace_changed") val paceChanged: Boolean = false,
     @SerializedName("pace_change_reason") val paceChangeReason: String? = null,
     @SerializedName("pace_preference") val pacePreference: Double? = null

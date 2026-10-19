@@ -115,7 +115,7 @@ fun ConversationScreen(
                         id = "a_$turn",
                         role = MessageRole.ASSISTANT,
                         text = resp.reply,
-                        translation = getEnglishTranslation(resp.reply)
+                        translation = resp.translation ?: getEnglishTranslation(resp.reply)
                     )
                 )
 
