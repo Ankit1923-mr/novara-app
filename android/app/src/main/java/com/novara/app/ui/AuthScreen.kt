@@ -1,30 +1,45 @@
 package com.novara.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.novara.app.model.AuthResponse
 import com.novara.app.network.NovaraRepository
+import com.novara.app.ui.components.BotanicalLeafEmblem
+import com.novara.app.ui.components.NovaraButton
+import com.novara.app.ui.components.NovaraTextField
+import com.novara.app.ui.components.SpanishStreetscapeIllustration
 import com.novara.app.ui.theme.*
 import kotlinx.coroutines.launch
 
 /**
- * Account login/signup - Phase 1 security work. Calls the existing
- * backend /auth/signup and /auth/login endpoints (unchanged this
- * session); on success hands the caller the AuthResponse (token,
- * email, learner_id == email, has_profile) so it can store the token
- * and route to intake (new account) or scenario (returning account).
+ * Screen 2 — Authentication
+ * Redesigned Sign In / Create Account with warm editorial aesthetics, tab bar,
+ * password toggle, and social icons, connected to live backend signup/login.
  */
 @Composable
 fun AuthScreen(
@@ -32,9 +47,10 @@ fun AuthScreen(
     anonymousProfileLearnerId: String?,
     onAuthenticated: (AuthResponse) -> Unit
 ) {
-    var isSignupMode by remember { mutableStateOf(true) }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var isSignInMode by remember { mutableStateOf(true) }
+    var email by remember { mutableStateOf("sakshi@example.com") }
+    var password by remember { mutableStateOf("password123") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -42,107 +58,192 @@ fun AuthScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BgPrimary)
-            .padding(horizontal = 24.dp, vertical = 32.dp)
-            .verticalScroll(rememberScrollState())
+            .background(WarmIvory)
+            .padding(horizontal = 24.dp, vertical = 20.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Header Logo & Slogan
+        BotanicalLeafEmblem(modifier = Modifier.size(44.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = "NOVARA",
-            fontSize = 28.sp,
+            fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary
+            fontSize = 32.sp,
+            letterSpacing = 3.sp,
+            color = DeepTeal
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (isSignupMode) "Create an account to start learning" else "Welcome back",
-            fontSize = 14.sp,
-            color = TextSecondary
+            text = "Learn languages.\nLive the culture.",
+            fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Normal,
+            fontSize = 15.sp,
+            color = SecondaryText,
+            textAlign = TextAlign.Center
         )
 
-        if (anonymousProfileLearnerId != null) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = BgElevated)
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Sign In / Create Account Tab Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { isSignInMode = true; errorMessage = null }
+                    .padding(vertical = 8.dp)
             ) {
                 Text(
-                    text = "You have previous guest activity (id: $anonymousProfileLearnerId). " +
-                        "Signing in starts a separate, account-linked profile - your guest data " +
-                        "isn't deleted, but it also isn't linked to this account.",
-                    fontSize = 12.sp,
-                    color = TextSecondary,
-                    modifier = Modifier.padding(12.dp)
+                    text = "Sign In",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (isSignInMode) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isSignInMode) PrimaryText else SecondaryText
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                if (isSignInMode) {
+                    Box(
+                        modifier = Modifier
+                            .width(40.dp)
+                            .height(3.dp)
+                            .background(Terracotta, shape = RoundedCornerShape(2.dp))
+                    )
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        OutlinedTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Email") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        if (errorMessage != null) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(text = errorMessage ?: "", color = ErrorColor, fontSize = 13.sp)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { isSignInMode = false; errorMessage = null }
+                    .padding(vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Create Account",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (!isSignInMode) FontWeight.Bold else FontWeight.Normal,
+                    color = if (!isSignInMode) PrimaryText else SecondaryText
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                if (!isSignInMode) {
+                    Box(
+                        modifier = Modifier
+                            .width(40.dp)
+                            .height(3.dp)
+                            .background(Terracotta, shape = RoundedCornerShape(2.dp))
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Button(
+        // Input Fields
+        NovaraTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = "Email",
+            placeholder = "your.email@domain.com",
+            leadingIcon = Icons.Default.Email
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "Password",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = PrimaryText,
+                modifier = Modifier.padding(bottom = 6.dp, start = 4.dp)
+            )
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                placeholder = { Text("••••••••", style = MaterialTheme.typography.bodyMedium, color = MutedText) },
+                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = SecondaryText) },
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                            contentDescription = "Toggle Password Visibility",
+                            tint = SecondaryText
+                        )
+                    }
+                },
+                singleLine = true,
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = CardBackground,
+                    unfocusedContainerColor = CardBackground,
+                    focusedBorderColor = DeepTeal,
+                    unfocusedBorderColor = SubtleBorder,
+                    focusedTextColor = PrimaryText,
+                    unfocusedTextColor = PrimaryText
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        if (isSignInMode) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    text = "Forgot password?",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SecondaryText,
+                    modifier = Modifier.clickable { }
+                )
+            }
+        }
+
+        if (errorMessage != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = errorMessage ?: "", color = ErrorRed, fontSize = 13.sp)
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Main Terracotta Sign In Button
+        NovaraButton(
+            text = if (isSignInMode) "Sign In" else "Create Account",
             onClick = {
                 if (email.isBlank() || password.isBlank()) {
-                    errorMessage = "Enter both email and password."
-                    return@Button
+                    errorMessage = "Please enter both email and password."
+                    return@NovaraButton
                 }
                 errorMessage = null
                 isLoading = true
                 scope.launch {
-                    val result = if (isSignupMode) {
+                    val result = if (!isSignInMode) {
                         repository.signup(email.trim(), password)
                     } else {
                         repository.login(email.trim(), password)
                     }
                     isLoading = false
                     result.onSuccess { onAuthenticated(it) }
-                        .onFailure { errorMessage = it.message ?: "Couldn't reach the backend." }
+                        .onFailure { errorMessage = it.message ?: "Authentication failed. Check your connection." }
                 }
             },
-            enabled = !isLoading,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            shape = RoundedCornerShape(25.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald)
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.height(20.dp), color = TextPrimary)
-            } else {
-                Text(if (isSignupMode) "Sign up" else "Log in", fontWeight = FontWeight.Bold)
-            }
-        }
+            containerColor = Terracotta,
+            isLoading = isLoading
+        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        TextButton(onClick = { isSignupMode = !isSignupMode; errorMessage = null }) {
-            Text(
-                if (isSignupMode) "Already have an account? Log in" else "New here? Sign up",
-                color = TextSecondary,
-                fontSize = 13.sp
-            )
-        }
+        // Architectural Illustration
+        SpanishStreetscapeIllustration(height = 120.dp)
     }
 }

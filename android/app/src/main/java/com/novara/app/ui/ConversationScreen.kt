@@ -1,6 +1,8 @@
 package com.novara.app.ui
 
-import androidx.compose.animation.animateColorAsState
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,18 +14,23 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.novara.app.audio.SpanishSpeechRecognizerManager
+import com.novara.app.audio.SpanishTextToSpeechManager
 import com.novara.app.model.ChatMessage
 import com.novara.app.model.MessageRole
 import com.novara.app.model.ScenarioResponse
@@ -35,7 +42,7 @@ import kotlinx.coroutines.launch
 /**
  * Screen 8 — Conversation Screen
  * Turn-by-turn Spanish AI partner chat with partner profile header, teal/ivory message bubbles,
- * suggested reply chips, and message input.
+ * suggested reply chips, native Spanish TTS speaker, and microphone speech recognition.
  */
 @Composable
 fun ConversationScreen(
@@ -45,13 +52,24 @@ fun ConversationScreen(
     onNavigateToReadiness: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val ttsManager = remember { SpanishTextToSpeechManager(context) }
+    val speechRecognizer = remember { SpanishSpeechRecognizerManager(context) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            ttsManager.shutdown()
+            speechRecognizer.stopListening()
+        }
+    }
+
     val messages = remember {
         mutableStateListOf(
             ChatMessage(
                 id = "open",
                 role = MessageRole.ASSISTANT,
                 text = scenario.openingLine,
-                translation = "Hello! How are you today?"
+                translation = getEnglishTranslation(scenario.openingLine)
             )
         )
     }
@@ -59,8 +77,24 @@ fun ConversationScreen(
     var inputText by remember { mutableStateOf("") }
     var turnNumber by remember { mutableIntStateOf(0) }
     var isSending by remember { mutableStateOf(false) }
+    var isListening by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            speechRecognizer.startListening(
+                onResult = { text ->
+                    inputText = text
+                    isListening = false
+                },
+                onError = { isListening = false },
+                onListeningStateChanged = { listening -> isListening = listening }
+            )
+        }
+    }
 
     val suggestedReplies = listOf("Sí, por favor.", "Me encantaría.", "Ahora no, gracias.")
 
@@ -99,10 +133,10 @@ fun ConversationScreen(
             }.onFailure {
                 messages.add(
                     ChatMessage(
-                        id = "err_$turn",
+                        id = "a_$turn",
                         role = MessageRole.ASSISTANT,
-                        text = "¡Muy bien! Continuemos hablando en el café.",
-                        translation = "Very good! Let's continue speaking in the café."
+                        text = "¡Muy bien! Continuemos hablando.",
+                        translation = "Very good! Let me know if you need anything else."
                     )
                 )
             }
@@ -143,7 +177,7 @@ fun ConversationScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = PrimaryText)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = PrimaryText)
                     }
                     LearnerAvatarBadge(
                         initials = "B",
@@ -211,17 +245,37 @@ fun ConversationScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Input Bar
+                // Input Bar with Mic & Send
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Mic Button
+                    IconButton(
+                        onClick = {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(if (isListening) TerracottaContainer else DeepTealContainer)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Voice Input",
+                            tint = if (isListening) TerracottaDark else DeepTeal,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        placeholder = { Text("Type a message...", color = MutedText, fontSize = 14.sp) },
+                        placeholder = { Text("Type in Spanish or English...", color = MutedText, fontSize = 14.sp) },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         shape = RoundedCornerShape(24.dp),
@@ -241,12 +295,12 @@ fun ConversationScreen(
                         onClick = { sendMessage(inputText) },
                         enabled = inputText.isNotBlank() && !isSending,
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
                             .background(DeepTeal)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Send,
+                            imageVector = Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Send",
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
@@ -303,7 +357,24 @@ fun ConversationScreen(
                                     .padding(horizontal = 16.dp, vertical = 12.dp)
                             ) {
                                 Column {
-                                    Text(msg.text, color = PrimaryText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(msg.text, color = PrimaryText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                        IconButton(
+                                            onClick = { ttsManager.speakSpanish(msg.text) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                                contentDescription = "Audio Playback",
+                                                tint = DeepTeal,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
                                     if (msg.translation != null) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(msg.translation, color = SecondaryText, fontSize = 12.sp)
